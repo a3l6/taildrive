@@ -1,0 +1,12 @@
+port = 8080
+tailscale_socket = "/var/run/tailscale/tailscaled.sock"
+
+[[share]]
+name = "documents"
+path = "/shares/documents"
+readonly = true
+
+[[share]]
+name = "dropzone"
+path = "/shares/dropzone"
+readonly = false
