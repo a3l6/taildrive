@@ -16,7 +16,7 @@ type Config struct {
 type Share struct {
 	Name     string `toml:"name"`
 	Path     string `toml:"path"`
-	ReadOnly bool   `toml:"read_only"`
+	ReadOnly bool   `toml:"readonly"`
 }
 
 func loadConfig(path string) (*Config, error) {

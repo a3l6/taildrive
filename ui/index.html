@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>tshare test</title>
+<style>
+  body { font-family: monospace; padding: 20px; max-width: 700px; }
+  input { width: 300px; margin: 4px 0; display: block; }
+  button { margin: 8px 0; }
+  pre { background: #f4f4f4; padding: 10px; white-space: pre-wrap; word-break: break-all; min-height: 32px; }
+  h3 { margin-top: 24px; border-bottom: 1px solid #ccc; }
+</style>
+</head>
+<body>
+
+<h2>tshare API test</h2>
+<label>Base URL: <input id="base" value="http://localhost:8080" /></label>
+
+<h3>GET /health</h3>
+<button onclick="req('GET', '/health', null, 'out-health')">Send</button>
+<pre id="out-health">—</pre>
+
+<h3>GET /peers</h3>
+<button onclick="req('GET', '/peers', null, 'out-peers')">Send</button>
+<pre id="out-peers">—</pre>
+
+<h3>GET /shares</h3>
+<button onclick="req('GET', '/shares', null, 'out-shares')">Send</button>
+<pre id="out-shares">—</pre>
+
+<h3>GET /shares/{share}/browse</h3>
+<input id="browse-share" placeholder="share name" />
+<input id="browse-path"  placeholder="path (optional)" />
+<button onclick="browse()">Send</button>
+<pre id="out-browse">—</pre>
+
+<h3>GET /shares/{share}/download</h3>
+<input id="dl-share" placeholder="share name" />
+<input id="dl-path"  placeholder="file path" />
+<button onclick="download()">Send</button>
+<pre id="out-download">—</pre>
+
+<h3>POST /shares/{share}/upload</h3>
+<input id="ul-share" placeholder="share name" />
+<input id="ul-path"  placeholder="destination path" />
+<input id="ul-file"  type="file" />
+<button onclick="upload()">Send</button>
+<pre id="out-upload">—</pre>
+
+<h3>POST /shares/{share}/delete</h3>
+<input id="del-share" placeholder="share name" />
+<input id="del-path"  placeholder="file path" />
+<button onclick="del()">Send</button>
+<pre id="out-delete">—</pre>
+
+<h3>POST /shares/{share}/rename</h3>
+<input id="ren-share"   placeholder="share name" />
+<input id="ren-path"    placeholder="current path" />
+<input id="ren-newname" placeholder="new name" />
+<button onclick="rename()">Send</button>
+<pre id="out-rename">—</pre>
+
+<script>
+  const base = () => document.getElementById('base').value.replace(/\/$/, '')
+  const val  = id => document.getElementById(id).value.trim()
+
+  function show(outId, status, text) {
+    try {
+      document.getElementById(outId).textContent = `${status}\n\n` + JSON.stringify(JSON.parse(text), null, 2)
+    } catch {
+      document.getElementById(outId).textContent = `${status}\n\n` + (text || '(empty)')
+    }
+  }
+
+  async function req(method, path, body, outId) {
+    document.getElementById(outId).textContent = 'loading...'
+    try {
+      const res = await fetch(base() + path, { method, body })
+      show(outId, res.status, await res.text())
+    } catch (e) {
+      document.getElementById(outId).textContent = 'Error: ' + e.message
+    }
+  }
+
+  function browse() {
+    const p = val('browse-path')
+    req('GET', `/shares/${val('browse-share')}/browse` + (p ? `?path=${encodeURIComponent(p)}` : ''), null, 'out-browse')
+  }
+
+  async function download() {
+    document.getElementById('out-download').textContent = 'loading...'
+    try {
+      const res = await fetch(`${base()}/shares/${val('dl-share')}/download?path=${encodeURIComponent(val('dl-path'))}`)
+      if (!res.ok) { show('out-download', res.status, await res.text()); return }
+      const blob = await res.blob()
+      const a = document.createElement('a')
+      a.href = URL.createObjectURL(blob)
+      a.download = val('dl-path').split('/').pop()
+      a.click()
+      document.getElementById('out-download').textContent = '200\n\ndownload triggered'
+    } catch (e) {
+      document.getElementById('out-download').textContent = 'Error: ' + e.message
+    }
+  }
+
+  function upload() {
+    const file = document.getElementById('ul-file').files[0]
+    if (!file) return alert('no file selected')
+    req('POST', `/shares/${val('ul-share')}/upload?path=${encodeURIComponent(val('ul-path'))}`, file, 'out-upload')
+  }
+
+  function del()    { req('POST', `/shares/${val('del-share')}/delete?path=${encodeURIComponent(val('del-path'))}`, null, 'out-delete') }
+  function rename() { req('POST', `/shares/${val('ren-share')}/rename?path=${encodeURIComponent(val('ren-path'))}&newname=${encodeURIComponent(val('ren-newname'))}`, null, 'out-rename') }
+</script>
+</body>
+</html>

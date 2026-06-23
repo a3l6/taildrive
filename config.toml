@@ -3,10 +3,10 @@ tailscale_socket = "/var/run/tailscale/tailscaled.sock"
 
 [[share]]
 name = "documents"
-path = "/shares/documents"
+path = "/tmp/tshare/documents"
 readonly = true
 
 [[share]]
 name = "dropzone"
-path = "/shares/dropzone"
+path = "/tmp/tshare/dropzone"
 readonly = false
