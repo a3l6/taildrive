@@ -1,12 +1,2 @@
 port = 8080
 tailscale_socket = "/var/run/tailscale/tailscaled.sock"
-
-[[share]]
-name = "documents"
-path = "/tmp/tshare/documents"
-readonly = true
-
-[[share]]
-name = "dropzone"
-path = "/tmp/tshare/dropzone"
-readonly = false
