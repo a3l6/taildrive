@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
 	"net"
 	"net/http"
 	"os"
@@ -38,7 +37,6 @@ func main() {
 	}
 
 	mux := http.NewServeMux()
-	mux.Handle("GET /", http.FileServer(http.Dir("./ui")))
 	mux.HandleFunc("GET /peers", handleListPeers(peers))
 	mux.HandleFunc("GET /shares", handleListShares(localShares))
 	mux.HandleFunc("GET /shares/{share}/browse", handleBrowseShare(localShares))
@@ -60,7 +58,6 @@ func main() {
 		return
 	}
 
-	log.Printf("Listening on %s", ip+":8080")
 	err = http.Serve(listener, mux)
 	if err != nil {
 		fmt.Println(err)

@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"io/fs"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -57,48 +56,38 @@ func handleBrowseShare(shares map[string]Share) http.HandlerFunc {
 		requestedPath := r.URL.Query().Get("path")
 		absPath, err := safePath(share.Path, requestedPath)
 		if err != nil {
-			http.Error(w, "invalid path", http.StatusBadRequest)
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+
+		entries, err := os.ReadDir(absPath)
+		if err != nil {
+			http.Error(w, "cannot read directory", http.StatusInternalServerError)
 			return
 		}
 
 		type Entry struct {
 			Name     string    `json:"name"`
-			Path     string    `json:"path"`
 			Size     int64     `json:"size"`
 			Modified time.Time `json:"modified"`
 			IsDir    bool      `json:"is_dir"`
 		}
+
 		type Response struct {
-			Path    string  `json:"path"`
 			Entries []Entry `json:"entries"`
+			Path    string  `json:"path"`
 		}
 
 		var result Response
 		result.Path = requestedPath
-
-		err = filepath.WalkDir(absPath, func(path string, d fs.DirEntry, err error) error {
-			if err != nil {
-				return err
-			}
-			// skip the root itself
-			if path == absPath {
-				return nil
-			}
-			info, _ := d.Info()
-			// path relative to the share root, not the server filesystem
-			rel, _ := filepath.Rel(share.Path, path)
+		for _, entry := range entries {
+			info, _ := entry.Info()
 			result.Entries = append(result.Entries, Entry{
-				Name:     d.Name(),
-				Path:     rel,
+				Name:     entry.Name(),
 				Size:     info.Size(),
 				Modified: info.ModTime(),
-				IsDir:    d.IsDir(),
+				IsDir:    info.IsDir(),
 			})
-			return nil
-		})
-		if err != nil {
-			http.Error(w, "could not walk directory", http.StatusInternalServerError)
-			return
 		}
 
 		w.Header().Set("Content-Type", "application/json")
@@ -218,7 +207,7 @@ func handleRenameShare(shares map[string]Share) http.HandlerFunc {
 			return
 		}
 
-		newName := r.URL.Query().Get("newname")
+		newName := r.URL.Query().Get("new_name")
 		if newName == "" {
 			http.Error(w, "new name not provided", http.StatusBadRequest)
 			return
