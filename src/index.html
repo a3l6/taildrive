@@ -3,17 +3,93 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta http-equiv="X-UA-Compatible" content="ie=edge" />
-    <title>Document</title>
+    <title>taildrive upload</title>
   </head>
   <body>
-    <form
-      enctype="multipart/form-data"
-      action="http://localhost:8080/upload"
-      method="post"
-    >
-      <input type="file" name="myFile" />
-      <input type="submit" value="upload" />
-    </form>
+    <h2>Upload</h2>
+    <label>Server: <input id="server" value="http://localhost:8080" /></label><br /><br />
+    <label>Share: <input id="share" value="dropzone" /></label><br /><br />
+    <label>Path: <input id="path" placeholder="leave blank to use filename" /></label><br /><br />
+    <label>File: <input type="file" id="file" /></label><br /><br />
+    <button onclick="upload()">Upload</button>
+    <pre id="log"></pre>
+
+    <script>
+      const CHUNK_SIZE = 4 * 1024 * 1024; // 4 MB
+
+      function log(msg) {
+        document.getElementById("log").textContent += msg + "\n";
+      }
+
+      async function sendChunk(url, chunk, start, end, total, index) {
+        const MAX_RETRIES = 3;
+        for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
+          try {
+            const resp = await fetch(url, {
+              method: "POST",
+              headers: {
+                "Content-Range": `bytes ${start}-${end - 1}/${total}`,
+                "Content-Type": "application/octet-stream",
+              },
+              body: chunk,
+            });
+
+            if (resp.status === 201 || resp.status === 206) return resp.status;
+
+            // 4xx — don't retry
+            if (resp.status >= 400 && resp.status < 500) {
+              throw new Error(`${resp.status} ${resp.statusText}`);
+            }
+
+            if (attempt === MAX_RETRIES - 1) {
+              throw new Error(`server error after ${MAX_RETRIES} attempts: ${resp.status}`);
+            }
+
+            log(`chunk ${index} attempt ${attempt + 1} failed (${resp.status}), retrying…`);
+          } catch (err) {
+            if (attempt === MAX_RETRIES - 1) throw err;
+            log(`chunk ${index} attempt ${attempt + 1} error: ${err.message}, retrying…`);
+          }
+        }
+      }
+
+      async function upload() {
+        const server = document.getElementById("server").value.replace(/\/$/, "");
+        const share = document.getElementById("share").value.trim();
+        const pathInput = document.getElementById("path").value.trim();
+        const file = document.getElementById("file").files[0];
+
+        if (!file) { log("no file selected"); return; }
+
+        const destPath = pathInput || file.name;
+        const url = `${server}/shares/${encodeURIComponent(share)}/upload?path=${encodeURIComponent(destPath)}`;
+        const total = file.size;
+        const numChunks = Math.ceil(total / CHUNK_SIZE);
+
+        document.getElementById("log").textContent = "";
+        log(`${file.name}  ${total} bytes  →  ${numChunks} chunk(s)`);
+
+        let start = 0;
+        let index = 0;
+
+        while (start < total) {
+          const end = Math.min(start + CHUNK_SIZE, total);
+          const chunk = file.slice(start, end);
+
+          try {
+            const status = await sendChunk(url, chunk, start, end, total, index);
+            log(`chunk ${index}  bytes ${start}–${end - 1}  →  ${status}`);
+          } catch (err) {
+            log(`chunk ${index} failed: ${err.message}`);
+            return;
+          }
+
+          start = end;
+          index++;
+        }
+
+        log("done");
+      }
+    </script>
   </body>
 </html>

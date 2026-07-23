@@ -1,7 +1,5 @@
 port = 8080
 tailscale_socket = "/var/run/tailscale/tailscaled.sock"
-<<<<<<< HEAD
-=======
 
 [[share]]
 name = "documents"
@@ -12,4 +10,3 @@ readonly = true
 name = "dropzone"
 path = "/shares/dropzone"
 readonly = false
->>>>>>> parent of cbdda34 (config: Changed readonly in config.toml)
