@@ -1,9 +1,12 @@
 package main
 
 import (
+	"crypto/md5"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -62,6 +65,7 @@ func handleBrowseShare(shares map[string]Share) http.HandlerFunc {
 
 		entries, err := os.ReadDir(absPath)
 		if err != nil {
+			log.Printf("browse: read dir %s: %v", absPath, err)
 			http.Error(w, "cannot read directory", http.StatusInternalServerError)
 			return
 		}
@@ -111,6 +115,7 @@ func handleDownloadShare(shares map[string]Share) http.HandlerFunc {
 
 		f, err := os.Open(absPath)
 		if err != nil {
+			log.Printf("download: open %s: %v", absPath, err)
 			http.Error(w, "file not found", http.StatusInternalServerError)
 			return
 		}
@@ -145,19 +150,68 @@ func handleUploadShare(shares map[string]Share) http.HandlerFunc {
 			return
 		}
 
-		f, err := os.Create(absPath)
+		cr := r.Header.Get("Content-Range")
+		if cr == "" { // regular file upload
+			f, err := os.Create(absPath)
+			if err != nil {
+				log.Printf("upload: create %s: %v", absPath, err)
+				http.Error(w, "cannot create file", http.StatusInternalServerError)
+				return
+			}
+			defer f.Close()
+
+			if _, err := io.Copy(f, r.Body); err != nil {
+				log.Printf("upload: write %s: %v", absPath, err)
+				http.Error(w, "cannot write file", http.StatusInternalServerError)
+				return
+			}
+			w.WriteHeader(http.StatusCreated)
+			return
+		}
+
+		var start, end, total int64
+		if _, err := fmt.Sscanf(cr, "bytes %d-%d/%d", &start, &end, &total); err != nil {
+			log.Printf("upload: bad Content-Range %q: %v", cr, err)
+			http.Error(w, "invalid Content-Range", http.StatusBadRequest)
+			return
+		}
+
+		data, err := io.ReadAll(r.Body)
 		if err != nil {
-			http.Error(w, "cannot create file", http.StatusInternalServerError)
+			log.Printf("upload: read chunk body %s: %v", absPath, err)
+			http.Error(w, "cannot read chunk", http.StatusInternalServerError)
+			return
+		}
+
+		if md5Hex := r.Header.Get("X-Chunk-MD5"); md5Hex != "" {
+			h := md5.Sum(data)
+			if hex.EncodeToString(h[:]) != md5Hex {
+				log.Printf("upload: chunk MD5 mismatch for %s", absPath)
+				http.Error(w, "chunk integrity check failed", http.StatusBadRequest)
+				return
+			}
+		}
+
+		f, err := os.OpenFile(absPath, os.O_CREATE|os.O_WRONLY, 0644)
+		if err != nil {
+			log.Printf("upload: open %s: %v", absPath, err)
+			http.Error(w, "cannot open file", http.StatusInternalServerError)
 			return
 		}
 		defer f.Close()
 
-		_, err = io.Copy(f, r.Body)
-		if err != nil {
-			http.Error(w, "cannot write file", http.StatusInternalServerError)
+		if _, err = f.WriteAt(data, start); err != nil {
+			log.Printf("upload: write chunk at %d in %s: %v", start, absPath, err)
+			http.Error(w, "cannot write chunk", http.StatusInternalServerError)
 			return
 		}
-		w.WriteHeader(http.StatusCreated)
+
+		if end+1 == total {
+			w.WriteHeader(http.StatusCreated)
+		} else {
+			w.WriteHeader(http.StatusPartialContent)
+		}
+
 	}
 }
 
@@ -181,6 +235,7 @@ func handleDeleteShare(shares map[string]Share) http.HandlerFunc {
 		}
 
 		if err := os.Remove(absPath); err != nil {
+			log.Printf("delete: remove %s: %v", absPath, err)
 			http.Error(w, "cannot delete file", http.StatusInternalServerError)
 			return
 		}
@@ -220,6 +275,7 @@ func handleRenameShare(shares map[string]Share) http.HandlerFunc {
 
 		newPath := filepath.Join(filepath.Dir(oldPath), newName)
 		if err := os.Rename(oldPath, newPath); err != nil {
+			log.Printf("rename: %s -> %s: %v", oldPath, newPath, err)
 			http.Error(w, "cannot rename file", http.StatusInternalServerError)
 			return
 		}

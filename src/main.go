@@ -4,10 +4,24 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net"
 	"net/http"
 	"os"
 )
+
+func corsMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Content-Range, X-Chunk-MD5")
+		if r.Method == http.MethodOptions {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
 
 func handleHealth(w http.ResponseWriter, r *http.Request) {
 	hostname, _ := os.Hostname()
@@ -58,7 +72,9 @@ func main() {
 		return
 	}
 
-	err = http.Serve(listener, mux)
+	log.Printf("taildrive: started listening on %s", listener.Addr().String())
+
+	err = http.Serve(listener, corsMiddleware(mux))
 	if err != nil {
 		fmt.Println(err)
 		return
