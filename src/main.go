@@ -36,6 +36,33 @@ func handleListPeers(peers []PeerShares) http.HandlerFunc {
 	}
 }
 
+type ProtocolConfig interface {
+	Name() string
+	Enabled() bool
+	Public() map[string]any
+}
+
+type Registry struct {
+	configs []ProtocolConfig
+}
+
+func (r *Registry) UnRegister(c ProtocolConfig) {
+	for idx, val := range r.configs {
+		if val.Name() == c.Name() {
+			r.configs = append(r.configs[:idx], r.configs[idx+1:]...)
+		}
+	}
+}
+
+func (r *Registry) Register(c ProtocolConfig) { r.configs = append(r.configs, c) }
+
+func handleConfig(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]any{"protocols": registry.configs})
+}
+
+var registry Registry
+
 func main() {
 	cfg, err := loadConfig("./config.toml")
 	if err != nil {
@@ -51,6 +78,7 @@ func main() {
 	}
 
 	mux := http.NewServeMux()
+	mux.HandleFunc("OPTIONS /config", handleConfig)
 	mux.HandleFunc("GET /peers", handleListPeers(peers))
 	mux.HandleFunc("GET /shares", handleListShares(localShares))
 	mux.HandleFunc("GET /shares/{share}/browse", handleBrowseShare(localShares))
