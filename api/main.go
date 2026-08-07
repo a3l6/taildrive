@@ -1,6 +1,7 @@
 package main
 
 import (
+	tdsftp "a3l6/m/sftp"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -45,6 +46,9 @@ func (t *TestProtocol) Public() map[string]any        { return map[string]any{} 
 func (t *TestProtocol) Run(ctx context.Context) error { return nil }
 
 func main() {
+	tdsftp.Run()
+	return
+
 	cfg, err := loadConfig("./config.toml")
 	if err != nil {
 		log.Fatal(err)

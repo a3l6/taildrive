@@ -1,4 +1,4 @@
-package sftp
+package taildrive_sftp
 
 import (
 	"bytes"

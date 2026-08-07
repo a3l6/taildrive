@@ -1,236 +1,132 @@
-package sftp
+package taildrive_sftp
 
 import (
+	"context"
+	"crypto/ed25519"
+	"crypto/rand"
+	"encoding/pem"
 	"io"
+	"log"
+	"net"
 	"os"
-	"path"
-	"path/filepath"
-	"strings"
-	"time"
 
 	"github.com/pkg/sftp"
+	"golang.org/x/crypto/ssh"
+	"tailscale.com/client/local"
+	"tailscale.com/tsnet"
 )
 
-type vfs struct {
-	mounts map[string]string // cleaned virtual path -> absolute dir
-}
+func Run() {
+	srv := &tsnet.Server{
+		Hostname: "sftp-vfs",
+		// AuthKey:  // os.Getenv("TS_AUTHKEY"),
+	}
+	defer srv.Close()
 
-func newVFS(m map[string]string) *vfs {
-	clean := make(map[string]string, len(m))
-	for v, r := range m {
-		vp := path.Clean("/" + strings.Trim(v, "/"))
-		rp, _ := filepath.Abs(r)
-		clean[vp] = rp
+	lc, err := srv.LocalClient()
+	if err != nil {
+		log.Fatal(err)
 	}
 
-	return &vfs{mounts: clean}
-}
+	sshConfig := &ssh.ServerConfig{
+		NoClientAuth: true,
+	}
 
-type resolved struct {
-	clean     string
-	real      string
-	mountRoot string
-	isVirtual bool
-}
+	hostKey, err := loadOrCreateHostKey("host_key")
+	if err != nil {
+		log.Fatal(err)
+	}
 
-func (fs *vfs) resolve(virtual string) (resolved, error) {
-	clean := path.Clean("/" + strings.TrimPrefix(virtual, "/"))
+	sshConfig.AddHostKey(hostKey)
 
-	best := ""
-	for vp := range fs.mounts {
-		if clean == vp || strings.HasPrefix(clean, vp+"/") {
-			if len(vp) > len(best) {
-				best = vp
-			}
+	ln, err := srv.Listen("tcp", ":22")
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	log.Println("sftp-vfs listening on the tailnet :22")
+
+	for {
+		conn, err := ln.Accept()
+		if err != nil {
+			continue
 		}
+		go handleConn(conn, sshConfig, lc)
 	}
-
-	if best != "" {
-		sub := strings.TrimPrefix(strings.TrimPrefix(clean, best), "/")
-		root := fs.mounts[best]
-		real := filepath.Join(root, filepath.FromSlash(sub))
-
-		if real != root && !strings.HasPrefix(real, root+string(os.PathSeparator)) {
-			return resolved{}, os.ErrPermission
-		}
-
-		return resolved{clean: clean, real: real, mountRoot: root}, nil
-	}
-
-	if clean == "/" || fs.isAncestor(clean) {
-		return resolved{clean: clean, isVirtual: true}, nil
-	}
-
-	return resolved{}, os.ErrNotExist
 }
 
-func (fs *vfs) isAncestor(clean string) bool {
-	prefix := clean + "/"
-
-	for vp := range fs.mounts {
-		if strings.HasPrefix(vp, prefix) {
-			return true
-		}
+func handleConn(nConn net.Conn, sshConfig *ssh.ServerConfig, lc *local.Client) {
+	login := "anonymous"
+	if who, err := lc.WhoIs(context.Background(), nConn.RemoteAddr().String()); err == nil {
+		login = who.UserProfile.LoginName
 	}
 
-	return false
-}
+	fs := newVFS(mountsFor(login))
 
-func (fs *vfs) children(clean string) []os.FileInfo {
-	prefix := "/"
-	if clean != "/" {
-		prefix = clean + "/"
+	sconn, chans, reqs, err := ssh.NewServerConn(nConn, sshConfig)
+	if err != nil {
+		return
 	}
 
-	seen := map[string]bool{}
-	var out []os.FileInfo
+	defer sconn.Close()
+	go ssh.DiscardRequests(reqs)
 
-	for vp := range fs.mounts {
-		if !strings.HasPrefix(vp, prefix) {
+	for newChan := range chans {
+		if newChan.ChannelType() != "session" {
+			newChan.Reject(ssh.UnknownChannelType, "only sessions")
 			continue
 		}
 
-		child := strings.TrimPrefix(vp, prefix)
-		if i := strings.IndexByte(child, '/'); i >= 0 {
-			child = child[:i]
-		}
-
-		if child == "" || seen[child] {
+		ch, requests, err := newChan.Accept()
+		if err != nil {
 			continue
 		}
 
-		seen[child] = true
-		out = append(out, virtualDir{name: child, mod: time.Now()})
-	}
-
-	return out
-}
-
-func (fs *vfs) Fileread(r *sftp.Request) (io.ReaderAt, error) {
-	res, err := fs.resolve(r.Filepath)
-	if err != nil {
-		return nil, err
-	}
-
-	if res.isVirtual {
-		return nil, os.ErrPermission
-	}
-
-	return os.OpenFile(res.real, os.O_RDONLY, 0)
-}
-
-func (fs *vfs) FileWrite(r *sftp.Request) (io.WriterAt, error) {
-	res, err := fs.resolve(r.Filepath)
-	if err != nil {
-		return nil, err
-	}
-
-	if res.isVirtual {
-		return nil, os.ErrPermission
-	}
-
-	flags := os.O_WRONLY | os.O_CREATE
-	if r.Pflags().Trunc {
-		flags |= os.O_TRUNC
-	}
-
-	return os.OpenFile(res.real, flags, 0o644)
-}
-
-func (fs *vfs) Filecmd(r *sftp.Request) error {
-	res, err := fs.resolve(r.Filepath)
-	if err != nil {
-		return err
-	}
-
-	if res.isVirtual || res.real == res.mountRoot {
-		return sftp.ErrSSHFxPermissionDenied
-	}
-
-	switch r.Method {
-	case "Rename":
-		t, err := fs.resolve(r.Target)
-		if err != nil {
-			return err
-		}
-
-		if t.isVirtual {
-			return sftp.ErrSSHFxPermissionDenied
-		}
-		return os.Rename(res.real, t.real)
-	case "Rmdir", "Remove":
-		return os.Remove(res.real)
-	case "Mkdir":
-		return os.Mkdir(res.real, 0o755)
-	case "Setstat":
-		return nil
-	default:
-		return sftp.ErrSSHFxOpUnsupported
-	}
-}
-
-func (fs *vfs) Filelist(r *sftp.Request) (sftp.ListerAt, error) {
-	res, err := fs.resolve(r.Filepath)
-	if err != nil {
-		return nil, err
-	}
-
-	switch r.Method {
-	case "List":
-		if res.isVirtual {
-			return listerat(fs.children(res.clean)), nil
-		}
-		entries, err := os.ReadDir(res.real)
-		if err != nil {
-			return nil, err
-		}
-
-		infos := make([]os.FileInfo, 0, len(entries))
-		for _, e := range entries {
-			if info, err := e.Info(); err == nil {
-				infos = append(infos, info)
+		go func() {
+			for req := range requests {
+				ok := req.Type == "subsystem" &&
+					len(req.Payload) >= 4 &&
+					string(req.Payload[4:]) == "sftp"
+				req.Reply(ok, nil)
 			}
-		}
+		}()
 
-		return listerat(infos), nil
-	case "Stat":
-		if res.isVirtual {
-			name := path.Base(res.clean)
-			return listerat{virtualDir{name: name, mod: time.Now()}}, nil
-		}
-		info, err := os.Stat(res.real)
-		if err != nil {
-			return nil, err
-		}
-		return listerat{info}, nil
-	default:
-		return nil, sftp.ErrSSHFxOpUnsupported
+		server := sftp.NewRequestServer(ch, sftp.Handlers{
+			FileGet:  fs,
+			FilePut:  fs,
+			FileCmd:  fs,
+			FileList: fs,
+		})
+
+		go func() {
+			if err := server.Serve(); err != nil && err != io.EOF {
+				log.Println("sftp serve:", err)
+			}
+			server.Close()
+		}()
 	}
 }
 
-type virtualDir struct {
-	name string
-	mod  time.Time
+func mountsFor(login string) map[string]string {
+	return map[string]string{
+		"/projects": "/tmp",
+	}
 }
 
-func (v virtualDir) Name() string       { return v.name }
-func (v virtualDir) Size() int64        { return 0 }
-func (v virtualDir) Mode() os.FileMode  { return os.ModeDir | 0o555 }
-func (v virtualDir) ModTime() time.Time { return v.mod }
-func (v virtualDir) IsDir() bool        { return true }
-func (v virtualDir) Sys() any           { return nil }
-
-type listerat []os.FileInfo
-
-func (l listerat) ListAt(ls []os.FileInfo, off int64) (int, error) {
-	if off >= int64(len(l)) {
-		return 0, io.EOF
+func loadOrCreateHostKey(path string) (ssh.Signer, error) {
+	if data, err := os.ReadFile(path); err == nil {
+		return ssh.ParsePrivateKey(data)
 	}
 
-	n := copy(ls, l[off:])
-	if n < len(ls) {
-		return n, io.EOF
+	_, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		return nil, err
 	}
 
-	return n, nil
+	block, err := ssh.MarshalPrivateKey(priv, "")
+	if err != nil {
+		return nil, err
+	}
+	os.WriteFile(path, pem.EncodeToMemory(block), 0o600)
+	return ssh.NewSignerFromSigner(priv)
 }
