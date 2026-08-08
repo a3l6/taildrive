@@ -1,6 +1,7 @@
 package main
 
 import (
+	tdsftp "a3l6/m/sftp"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -184,5 +185,45 @@ func autoConfigureProtocols(availableProtocols map[string]int, cfg Config) {
 		}
 
 		registry.Start(mostCompatibleProtocol, resolved)
+	}
+}
+
+// File Transfer Server Wrappers
+
+type GenericProtocolServer struct {
+	name    string
+	enabled bool
+	public  map[string]any
+	run     func(context.Context) error
+}
+
+func (s GenericProtocolServer) Name() string {
+	return s.name
+}
+
+func (s GenericProtocolServer) Enabled() bool {
+	return s.enabled
+}
+
+func (s GenericProtocolServer) Public() map[string]any {
+	return s.public
+}
+
+func (s *GenericProtocolServer) Run(ctx context.Context) error {
+	return s.run(ctx)
+}
+
+var SFTPProtocolServer GenericProtocolServer = GenericProtocolServer{
+	name:    "SFTP",
+	enabled: true, // TODO: Hook this up to config struct
+	public:  make(map[string]any),
+	run:     tdsftp.Run,
+}
+
+func (r *Registry) init() {
+	r.Register(&SFTPProtocolServer)
+
+	if SFTPProtocolServer.enabled {
+		r.Start("SFTP", &SFTPProtocolServer)
 	}
 }
