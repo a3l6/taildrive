@@ -1,19 +1,49 @@
 package taildrive_vfs
 
 import (
+	"context"
 	"io"
 	"os"
 	"path"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
-
-	"github.com/pkg/sftp"
 )
 
-type vfs struct {
-	mounts map[string]string // cleaned virtual path -> absolute dir
+// FS is the filesystem every protocol maps onto. Paths are slash separated and
+// rooted at "/". Errors should be a syscall.Errno or wrap one, since that is
+// the only form every protocol can translate.
+type FS interface {
+	Stat(ctx context.Context, p string) (Entry, error)
+	ReadDir(ctx context.Context, p string) ([]Entry, error)
+	Open(ctx context.Context, p string, flags int, perm os.FileMode) (File, error)
+	Mkdir(ctx context.Context, p string, perm os.FileMode) error
+	Remove(ctx context.Context, p string) error
+	Rename(ctx context.Context, oldPath, newPath string) error
+	Truncate(ctx context.Context, p string, size int64) error
 }
+
+//Offsets are absolute, so implementations never track a cursor of their own.
+type File interface {
+	io.ReaderAt
+	io.WriterAt
+	io.Closer
+}
+
+type Entry struct {
+	Name    string
+	Size    int64
+	Mode    os.FileMode
+	ModTime time.Time
+}
+
+type vfs struct {
+	mounts  map[string]string // cleaned virtual path -> absolute dir
+	started time.Time
+}
+
+var _ FS = (*vfs)(nil)
 
 func NewVFS(m map[string]string) *vfs {
 	clean := make(map[string]string, len(m))
@@ -23,7 +53,7 @@ func NewVFS(m map[string]string) *vfs {
 		clean[vp] = rp
 	}
 
-	return &vfs{mounts: clean}
+	return &vfs{mounts: clean, started: time.Now()}
 }
 
 type resolved struct {
@@ -51,7 +81,7 @@ func (fs *vfs) resolve(virtual string) (resolved, error) {
 		real := filepath.Join(root, filepath.FromSlash(sub))
 
 		if real != root && !strings.HasPrefix(real, root+string(os.PathSeparator)) {
-			return resolved{}, os.ErrPermission
+			return resolved{}, syscall.EPERM
 		}
 
 		return resolved{clean: clean, real: real, mountRoot: root}, nil
@@ -61,7 +91,22 @@ func (fs *vfs) resolve(virtual string) (resolved, error) {
 		return resolved{clean: clean, isVirtual: true}, nil
 	}
 
-	return resolved{}, os.ErrNotExist
+	return resolved{}, syscall.ENOENT
+}
+
+// writable resolves p and refuses the synthesised tree and the mount roots
+// themselves, which no protocol may rename or delete.
+func (fs *vfs) writable(p string) (resolved, error) {
+	res, err := fs.resolve(p)
+	if err != nil {
+		return resolved{}, err
+	}
+
+	if res.isVirtual || res.real == res.mountRoot {
+		return resolved{}, syscall.EPERM
+	}
+
+	return res, nil
 }
 
 func (fs *vfs) isAncestor(clean string) bool {
@@ -76,14 +121,14 @@ func (fs *vfs) isAncestor(clean string) bool {
 	return false
 }
 
-func (fs *vfs) children(clean string) []os.FileInfo {
+func (fs *vfs) children(clean string) []Entry {
 	prefix := "/"
 	if clean != "/" {
 		prefix = clean + "/"
 	}
 
 	seen := map[string]bool{}
-	var out []os.FileInfo
+	var out []Entry
 
 	for vp := range fs.mounts {
 		if !strings.HasPrefix(vp, prefix) {
@@ -100,137 +145,128 @@ func (fs *vfs) children(clean string) []os.FileInfo {
 		}
 
 		seen[child] = true
-		out = append(out, virtualDir{name: child, mod: time.Now()})
+		out = append(out, fs.virtualDir(child))
 	}
 
 	return out
 }
 
-func (fs *vfs) Fileread(r *sftp.Request) (io.ReaderAt, error) {
-	res, err := fs.resolve(r.Filepath)
+func (fs *vfs) virtualDir(name string) Entry {
+	return Entry{Name: name, Mode: os.ModeDir | 0o555, ModTime: fs.started}
+}
+
+func (fs *vfs) Stat(ctx context.Context, p string) (Entry, error) {
+	res, err := fs.resolve(p)
+	if err != nil {
+		return Entry{}, err
+	}
+
+	if res.isVirtual {
+		return fs.virtualDir(path.Base(res.clean)), nil
+	}
+
+	info, err := os.Stat(res.real)
+	if err != nil {
+		return Entry{}, err
+	}
+
+	return entryFrom(info), nil
+}
+
+func (fs *vfs) ReadDir(ctx context.Context, p string) ([]Entry, error) {
+	res, err := fs.resolve(p)
 	if err != nil {
 		return nil, err
 	}
 
 	if res.isVirtual {
-		return nil, os.ErrPermission
+		return fs.children(res.clean), nil
 	}
 
-	return os.OpenFile(res.real, os.O_RDONLY, 0)
+	dirents, err := os.ReadDir(res.real)
+	if err != nil {
+		return nil, err
+	}
+
+	entries := make([]Entry, 0, len(dirents))
+	for _, d := range dirents {
+		info, err := d.Info()
+		if err != nil {
+			continue
+		}
+		entries = append(entries, entryFrom(info))
+	}
+
+	return entries, nil
 }
 
-func (fs *vfs) Filewrite(r *sftp.Request) (io.WriterAt, error) {
-	res, err := fs.resolve(r.Filepath)
+func (fs *vfs) Open(ctx context.Context, p string, flags int, perm os.FileMode) (File, error) {
+	res, err := fs.resolve(p)
 	if err != nil {
 		return nil, err
 	}
 
 	if res.isVirtual {
-		return nil, os.ErrPermission
+		return nil, syscall.EPERM
 	}
 
-	flags := os.O_WRONLY | os.O_CREATE
-	if r.Pflags().Trunc {
-		flags |= os.O_TRUNC
+	if perm == 0 {
+		perm = 0o644
 	}
 
-	return os.OpenFile(res.real, flags, 0o644)
+	return os.OpenFile(res.real, flags, perm)
 }
 
-func (fs *vfs) Filecmd(r *sftp.Request) error {
-	res, err := fs.resolve(r.Filepath)
+func (fs *vfs) Mkdir(ctx context.Context, p string, perm os.FileMode) error {
+	res, err := fs.writable(p)
 	if err != nil {
 		return err
 	}
 
-	if res.isVirtual || res.real == res.mountRoot {
-		return sftp.ErrSSHFxPermissionDenied
+	if perm == 0 {
+		perm = 0o755
 	}
 
-	switch r.Method {
-	case "Rename":
-		t, err := fs.resolve(r.Target)
-		if err != nil {
-			return err
-		}
-
-		if t.isVirtual {
-			return sftp.ErrSSHFxPermissionDenied
-		}
-		return os.Rename(res.real, t.real)
-	case "Rmdir", "Remove":
-		return os.Remove(res.real)
-	case "Mkdir":
-		return os.Mkdir(res.real, 0o755)
-	case "Setstat":
-		return nil
-	default:
-		return sftp.ErrSSHFxOpUnsupported
-	}
+	return os.Mkdir(res.real, perm)
 }
 
-func (fs *vfs) Filelist(r *sftp.Request) (sftp.ListerAt, error) {
-	res, err := fs.resolve(r.Filepath)
+func (fs *vfs) Remove(ctx context.Context, p string) error {
+	res, err := fs.writable(p)
 	if err != nil {
-		return nil, err
+		return err
 	}
 
-	switch r.Method {
-	case "List":
-		if res.isVirtual {
-			return listerat(fs.children(res.clean)), nil
-		}
-		entries, err := os.ReadDir(res.real)
-		if err != nil {
-			return nil, err
-		}
-
-		infos := make([]os.FileInfo, 0, len(entries))
-		for _, e := range entries {
-			if info, err := e.Info(); err == nil {
-				infos = append(infos, info)
-			}
-		}
-
-		return listerat(infos), nil
-	case "Stat":
-		if res.isVirtual {
-			name := path.Base(res.clean)
-			return listerat{virtualDir{name: name, mod: time.Now()}}, nil
-		}
-		info, err := os.Stat(res.real)
-		if err != nil {
-			return nil, err
-		}
-		return listerat{info}, nil
-	default:
-		return nil, sftp.ErrSSHFxOpUnsupported
-	}
+	return os.Remove(res.real)
 }
 
-type virtualDir struct {
-	name string
-	mod  time.Time
+func (fs *vfs) Rename(ctx context.Context, oldPath, newPath string) error {
+	from, err := fs.writable(oldPath)
+	if err != nil {
+		return err
+	}
+
+	to, err := fs.writable(newPath)
+	if err != nil {
+		return err
+	}
+
+	return os.Rename(from.real, to.real)
 }
 
-func (v virtualDir) Name() string       { return v.name }
-func (v virtualDir) Size() int64        { return 0 }
-func (v virtualDir) Mode() os.FileMode  { return os.ModeDir | 0o555 }
-func (v virtualDir) ModTime() time.Time { return v.mod }
-func (v virtualDir) IsDir() bool        { return true }
-func (v virtualDir) Sys() any           { return nil }
-
-type listerat []os.FileInfo
-
-func (l listerat) ListAt(ls []os.FileInfo, off int64) (int, error) {
-	if off >= int64(len(l)) {
-		return 0, io.EOF
+func (fs *vfs) Truncate(ctx context.Context, p string, size int64) error {
+	res, err := fs.writable(p)
+	if err != nil {
+		return err
 	}
 
-	n := copy(ls, l[off:])
-	if n < len(ls) {
-		return n, io.EOF
-	}
+	return os.Truncate(res.real, size)
+}
 
-	return n, nil
+func entryFrom(info os.FileInfo) Entry {
+	return Entry{
+		Name:    info.Name(),
+		Size:    info.Size(),
+		Mode:    info.Mode(),
+		ModTime: info.ModTime(),
+	}
 }
