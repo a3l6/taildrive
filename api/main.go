@@ -74,11 +74,6 @@ func main() {
 	mux.HandleFunc("GET /config", handleConfig)
 	mux.HandleFunc("GET /peers", handleListPeers(peers))
 	mux.HandleFunc("GET /shares", handleListShares(localShares))
-	mux.HandleFunc("GET /shares/{share}/browse", handleBrowseShare(localShares))
-	mux.HandleFunc("GET /shares/{share}/download", handleDownloadShare(localShares))
-	mux.HandleFunc("POST /shares/{share}/upload", handleUploadShare(localShares))
-	mux.HandleFunc("POST /shares/{share}/delete", handleDeleteShare(localShares))
-	mux.HandleFunc("POST /shares/{share}/rename", handleRenameShare(localShares))
 	mux.HandleFunc("GET /health", handleHealth)
 
 	ip, err := getTailscaleIP(context.Background(), cfg)
