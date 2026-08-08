@@ -111,7 +111,6 @@ func (o *Options) applyDefaults() {
 	}
 }
 
-// mount is the state every node in one mount shares.
 type mount struct {
 	backend  Backend
 	uid, gid uint32
@@ -177,8 +176,6 @@ func Mount(ctx context.Context, mountpoint string, backend Backend, opts Options
 	return ctx.Err()
 }
 
-// Run mounts the default backend. The signature matches the runner the api
-// registry expects, so FUSE starts and stops like any other protocol.
 func Run(ctx context.Context) error {
 	mountpoint, backend := defaultMount()
 	return Mount(ctx, mountpoint, backend, Options{})
@@ -191,8 +188,7 @@ func defaultMount() (string, Backend) {
 	return filepath.Join(os.Getenv("HOME"), "taildrive"), NewOSBackend("/tmp")
 }
 
-// node is one file or directory. It stores no path of its own; go-fuse tracks
-// the tree, so a rename moves every descendant for free.
+// node is one file or directory. It stores no path of its own
 type node struct {
 	fs.Inode
 	mount *mount
@@ -243,8 +239,6 @@ func (n *node) Setattr(ctx context.Context, fh fs.FileHandle, in *fuse.SetAttrIn
 		}
 	}
 
-	// Mode, owner and timestamps are accepted and dropped: not every protocol
-	// can express them, and reporting EPERM makes cp and editors fail.
 	return n.Getattr(ctx, fh, out)
 }
 
@@ -279,8 +273,6 @@ func (n *node) Create(ctx context.Context, name string, flags uint32, mode uint3
 		return nil, nil, 0, fs.ToErrno(err)
 	}
 
-	// Synthesised rather than stat'ed: the file is empty and the attribute
-	// timeout corrects anything the backend disagreed about.
 	child := n.NewInode(ctx, &node{mount: n.mount}, fs.StableAttr{Mode: syscall.S_IFREG})
 	n.mount.setAttr(Entry{Name: name, Mode: perm, ModTime: time.Now()}, &out.Attr)
 
@@ -315,7 +307,6 @@ func (n *node) Rmdir(ctx context.Context, name string) syscall.Errno {
 }
 
 func (n *node) Rename(ctx context.Context, name string, newParent fs.InodeEmbedder, newName string, flags uint32) syscall.Errno {
-	// RENAME_EXCHANGE and RENAME_NOREPLACE have no portable equivalent.
 	if flags != 0 {
 		return syscall.EINVAL
 	}
@@ -331,9 +322,6 @@ func (n *node) Rename(ctx context.Context, name string, newParent fs.InodeEmbedd
 	return 0
 }
 
-// handle is one open file. The mutex is here because the kernel dispatches
-// reads and writes on the same handle concurrently and few protocol clients
-// promise that is safe.
 type handle struct {
 	mu   sync.Mutex
 	file File
@@ -401,8 +389,6 @@ func (m *mount) setAttr(e Entry, out *fuse.Attr) {
 	out.SetTimes(&t, &t, &t)
 }
 
-// fileType reduces a Go mode to the S_IF* bits FUSE indexes nodes by. Anything
-// that is not a directory is presented as a regular file.
 func fileType(mode os.FileMode) uint32 {
 	if mode.IsDir() {
 		return syscall.S_IFDIR
@@ -417,9 +403,7 @@ func openFlags(flags uint32) int {
 	return int(flags) &^ syscall.O_APPEND
 }
 
-// OSBackend serves a local directory. It exists so the mount can be exercised
-// end to end before any protocol client is wired up, and as the shortest
-// example of what an adapter owes the interface.
+
 type OSBackend struct {
 	root string
 }
