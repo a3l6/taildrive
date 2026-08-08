@@ -52,7 +52,7 @@ func Run(ctx context.Context) error {
 		ln.Close()
 	}()
 
-	log.Println("sftp-vfs listening on the tailnet :22")
+	log.Println("sftp-vfs: listening on the tailnet :22")
 
 	var conns sync.WaitGroup
 	for {
@@ -72,7 +72,7 @@ func Run(ctx context.Context) error {
 	}
 
 	conns.Wait()
-	log.Println("sftp-vfs stopped")
+	log.Println("sftp-vfs: stopped")
 	return ctx.Err()
 }
 
