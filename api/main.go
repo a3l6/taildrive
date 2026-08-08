@@ -73,6 +73,9 @@ func main() {
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /config", handleConfig)
+	mux.HandleFunc("GET /stop", func(w http.ResponseWriter, r *http.Request) {
+		registry.Stop("SFTP")
+	})
 	mux.HandleFunc("GET /peers", handleListPeers(peers))
 	mux.HandleFunc("GET /shares", handleListShares(localShares))
 	mux.HandleFunc("GET /shares/{share}/browse", handleBrowseShare(localShares))

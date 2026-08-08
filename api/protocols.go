@@ -13,6 +13,7 @@ import (
 type ProtocolConfig interface {
 	Name() string
 	Enabled() bool
+	ToggleEnabled()
 	Public() map[string]any
 	Run(ctx context.Context) error
 }
@@ -66,6 +67,12 @@ func (r *Registry) Start(name string, s ProtocolConfig) error {
 
 		if err := s.Run(ctx); err != nil && err != context.Canceled {
 			log.Printf("%s service failed: %s", name, err)
+		} else {
+			for _, config := range r.configs {
+				if config.Name() == name {
+					config.ToggleEnabled()
+				}
+			}
 		}
 	}()
 
@@ -75,9 +82,15 @@ func (r *Registry) Start(name string, s ProtocolConfig) error {
 
 func (r *Registry) Stop(name string) {
 	r.muregistrar.Lock()
+	for _, config := range r.configs {
+		if config.Name() == name {
+			config.ToggleEnabled()
+		}
+	}
+
 	cancel, ok := r.registrar[name]
 	r.muregistrar.Unlock()
-	if !ok {
+	if ok {
 		cancel()
 	}
 }
@@ -197,21 +210,11 @@ type GenericProtocolServer struct {
 	run     func(context.Context) error
 }
 
-func (s GenericProtocolServer) Name() string {
-	return s.name
-}
-
-func (s GenericProtocolServer) Enabled() bool {
-	return s.enabled
-}
-
-func (s GenericProtocolServer) Public() map[string]any {
-	return s.public
-}
-
-func (s *GenericProtocolServer) Run(ctx context.Context) error {
-	return s.run(ctx)
-}
+func (s GenericProtocolServer) Name() string                   { return s.name }
+func (s GenericProtocolServer) Enabled() bool                  { return s.enabled }
+func (s *GenericProtocolServer) ToggleEnabled()                { s.enabled = !s.enabled }
+func (s GenericProtocolServer) Public() map[string]any         { return s.public }
+func (s *GenericProtocolServer) Run(ctx context.Context) error { return s.run(ctx) }
 
 var SFTPProtocolServer GenericProtocolServer = GenericProtocolServer{
 	name:    "SFTP",
