@@ -84,7 +84,7 @@ func handleConn(ctx context.Context, nConn net.Conn, sshConfig *ssh.ServerConfig
 		login = who.UserProfile.LoginName
 	}
 
-	fs := ts_vfs.NewVFS(mountsFor(login))
+	h := handlers{fs: ts_vfs.NewVFS(mountsFor(login))}
 
 	sconn, chans, reqs, err := ssh.NewServerConn(nConn, sshConfig)
 	if err != nil {
@@ -127,10 +127,10 @@ func handleConn(ctx context.Context, nConn net.Conn, sshConfig *ssh.ServerConfig
 		}()
 
 		server := sftp.NewRequestServer(ch, sftp.Handlers{
-			FileGet:  fs,
-			FilePut:  fs,
-			FileCmd:  fs,
-			FileList: fs,
+			FileGet:  h,
+			FilePut:  h,
+			FileCmd:  h,
+			FileList: h,
 		})
 
 		sessions.Add(1)
