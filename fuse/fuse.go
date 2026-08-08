@@ -1,21 +1,12 @@
-// Package taildrive_fuse exposes a remote filesystem as a local POSIX mount.
+// Package taildrive_fuse mounts a vfs.FS as a local POSIX filesystem.
 //
-// Nothing in the FUSE layer knows how bytes reach the peer. Every operation
-// goes through Backend, a small path-based interface, so each transfer
-// protocol implements Backend once and inherits the whole mount. An SFTP
-// backend wraps *sftp.Client; a WebDAV backend wraps an HTTP client; OSBackend
-// at the bottom of this file wraps the local disk and doubles as the reference
-// for what an adapter has to provide.
+// It holds no protocol knowledge of its own: whatever satisfies vfs.FS can be
+// mounted, so FUSE is one more adapter onto the same interface the sftp
+// handlers use.
 //
-// Paths handed to a Backend are always slash-separated and rooted at "/", the
-// same convention vfs.resolve uses on the serving side.
-//
-// Presenting several peers under one mountpoint is a Backend that dispatches
-// on the first path segment, not something this file does.
-//
-// Deliberately absent: symlinks, hardlinks, xattrs, statfs, and persistent
-// chmod/chown. Setattr accepts and drops mode and time changes because
-// refusing them breaks ordinary tools, but truncation is honored.
+// Symlinks, hardlinks, xattrs and statfs are unimplemented. Setattr accepts
+// and drops mode, owner and time changes because refusing them breaks cp and
+// editors; truncation is honoured.
 package taildrive_fuse
 
 import (
@@ -25,59 +16,15 @@ import (
 	"os"
 	"path"
 	"path/filepath"
-	"strings"
 	"sync"
 	"syscall"
 	"time"
 
 	"github.com/hanwen/go-fuse/v2/fs"
 	"github.com/hanwen/go-fuse/v2/fuse"
+
+	ts_vfs "a3l6/m/vfs"
 )
-
-// Entry is one stat result. Only the directory bit and the permission bits of
-// Mode are read; a protocol that cannot report a mode should still set
-// os.ModeDir correctly and leave the permissions at 0.
-type Entry struct {
-	Name    string
-	Size    int64
-	Mode    os.FileMode
-	ModTime time.Time
-}
-
-// Backend is the protocol-agnostic filesystem every protocol maps onto.
-//
-// Implementations must be safe for concurrent use: the kernel issues FUSE
-// requests in parallel. Errors should be os.ErrNotExist, os.ErrPermission,
-// os.ErrExist or a syscall.Errno where possible, since fs.ToErrno translates
-// those into the right errno and anything else becomes EIO.
-type Backend interface {
-	Stat(ctx context.Context, p string) (Entry, error)
-	ReadDir(ctx context.Context, p string) ([]Entry, error)
-
-	// Open opens p with os.O_* flags, creating it with perm when the flags
-	// ask for it. Protocols without a create mode may ignore perm.
-	Open(ctx context.Context, p string, flags int, perm os.FileMode) (File, error)
-
-	Mkdir(ctx context.Context, p string, perm os.FileMode) error
-
-	// Remove deletes a file or an empty directory; FUSE unlink and rmdir both
-	// land here.
-	Remove(ctx context.Context, p string) error
-
-	Rename(ctx context.Context, oldPath, newPath string) error
-	Truncate(ctx context.Context, p string, size int64) error
-
-	// Close releases the underlying connection. Called once, after unmount.
-	Close() error
-}
-
-// File is an open remote file. The kernel always supplies absolute offsets,
-// so a backend never has to track a cursor.
-type File interface {
-	io.ReaderAt
-	io.WriterAt
-	io.Closer
-}
 
 // Options tunes a single mount.
 type Options struct {
@@ -85,16 +32,14 @@ type Options struct {
 	Name string
 
 	// ReadOnly mounts with "ro" so the kernel rejects writes before they
-	// reach the backend. Mirrors Share.ReadOnly.
+	// reach the filesystem. Mirrors Share.ReadOnly.
 	ReadOnly bool
 
 	// Debug logs the raw FUSE traffic.
 	Debug bool
 
 	// AttrTimeout and EntryTimeout are how long the kernel may cache stat
-	// results and name lookups. Both default to a second: long enough that
-	// `ls -l` is not a round trip per file, short enough that a peer's
-	// changes show up on their own.
+	// results and name lookups. Both default to a second.
 	AttrTimeout  time.Duration
 	EntryTimeout time.Duration
 }
@@ -112,13 +57,13 @@ func (o *Options) applyDefaults() {
 }
 
 type mount struct {
-	backend  Backend
+	fs       ts_vfs.FS
 	uid, gid uint32
 }
 
-// Mount mounts backend at mountpoint and blocks until ctx is cancelled or the
-// filesystem is unmounted from outside. The backend is closed on the way out.
-func Mount(ctx context.Context, mountpoint string, backend Backend, opts Options) error {
+// Mount mounts fsys at mountpoint and blocks until ctx is cancelled or the
+// filesystem is unmounted from outside. The caller keeps ownership of fsys.
+func Mount(ctx context.Context, mountpoint string, fsys ts_vfs.FS, opts Options) error {
 	opts.applyDefaults()
 
 	if err := os.MkdirAll(mountpoint, 0o755); err != nil {
@@ -126,9 +71,9 @@ func Mount(ctx context.Context, mountpoint string, backend Backend, opts Options
 	}
 
 	m := &mount{
-		backend: backend,
-		uid:     uint32(os.Getuid()),
-		gid:     uint32(os.Getgid()),
+		fs:  fsys,
+		uid: uint32(os.Getuid()),
+		gid: uint32(os.Getgid()),
 	}
 
 	mountOpts := fuse.MountOptions{
@@ -152,8 +97,7 @@ func Mount(ctx context.Context, mountpoint string, backend Backend, opts Options
 
 	log.Printf("fuse: mounted %s at %s", opts.Name, mountpoint)
 
-	// Unblocks the Wait below when the registry cancels us. A busy mountpoint
-	// makes Unmount fail, and the mount then outlives the process.
+	// A busy mountpoint makes Unmount fail, and the mount then outlives us.
 	served := make(chan struct{})
 	go func() {
 		select {
@@ -168,24 +112,19 @@ func Mount(ctx context.Context, mountpoint string, backend Backend, opts Options
 	server.Wait()
 	close(served)
 
-	if err := backend.Close(); err != nil {
-		log.Printf("fuse: closing backend: %s", err)
-	}
-
 	log.Printf("fuse: unmounted %s", mountpoint)
 	return ctx.Err()
 }
 
 func Run(ctx context.Context) error {
-	mountpoint, backend := defaultMount()
-	return Mount(ctx, mountpoint, backend, Options{})
+	mountpoint, fsys := defaultMount()
+	return Mount(ctx, mountpoint, fsys, Options{})
 }
 
-// defaultMount is placeholder wiring, the counterpart to sftp.mountsFor:
-// swap the OS backend for the negotiated protocol client once peer selection
-// picks one.
-func defaultMount() (string, Backend) {
-	return filepath.Join(os.Getenv("HOME"), "taildrive"), NewOSBackend("/tmp")
+// defaultMount is placeholder wiring, the counterpart to sftp.mountsFor: swap
+// the local vfs for a peer's once protocol negotiation picks one.
+func defaultMount() (string, ts_vfs.FS) {
+	return filepath.Join(os.Getenv("HOME"), "taildrive"), ts_vfs.NewVFS(map[string]string{"/projects": "/tmp"})
 }
 
 // node is one file or directory. It stores no path of its own
@@ -212,7 +151,7 @@ func (n *node) path() string { return "/" + n.Path(n.Root()) }
 func (n *node) childPath(name string) string { return path.Join(n.path(), name) }
 
 func (n *node) Lookup(ctx context.Context, name string, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
-	e, err := n.mount.backend.Stat(ctx, n.childPath(name))
+	e, err := n.mount.fs.Stat(ctx, n.childPath(name))
 	if err != nil {
 		return nil, fs.ToErrno(err)
 	}
@@ -223,7 +162,7 @@ func (n *node) Lookup(ctx context.Context, name string, out *fuse.EntryOut) (*fs
 }
 
 func (n *node) Getattr(ctx context.Context, fh fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
-	e, err := n.mount.backend.Stat(ctx, n.path())
+	e, err := n.mount.fs.Stat(ctx, n.path())
 	if err != nil {
 		return fs.ToErrno(err)
 	}
@@ -234,7 +173,7 @@ func (n *node) Getattr(ctx context.Context, fh fs.FileHandle, out *fuse.AttrOut)
 
 func (n *node) Setattr(ctx context.Context, fh fs.FileHandle, in *fuse.SetAttrIn, out *fuse.AttrOut) syscall.Errno {
 	if size, ok := in.GetSize(); ok {
-		if err := n.mount.backend.Truncate(ctx, n.path(), int64(size)); err != nil {
+		if err := n.mount.fs.Truncate(ctx, n.path(), int64(size)); err != nil {
 			return fs.ToErrno(err)
 		}
 	}
@@ -243,7 +182,7 @@ func (n *node) Setattr(ctx context.Context, fh fs.FileHandle, in *fuse.SetAttrIn
 }
 
 func (n *node) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
-	entries, err := n.mount.backend.ReadDir(ctx, n.path())
+	entries, err := n.mount.fs.ReadDir(ctx, n.path())
 	if err != nil {
 		return nil, fs.ToErrno(err)
 	}
@@ -257,7 +196,7 @@ func (n *node) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
 }
 
 func (n *node) Open(ctx context.Context, flags uint32) (fs.FileHandle, uint32, syscall.Errno) {
-	f, err := n.mount.backend.Open(ctx, n.path(), openFlags(flags), 0)
+	f, err := n.mount.fs.Open(ctx, n.path(), openFlags(flags), 0)
 	if err != nil {
 		return nil, 0, fs.ToErrno(err)
 	}
@@ -268,13 +207,13 @@ func (n *node) Open(ctx context.Context, flags uint32) (fs.FileHandle, uint32, s
 func (n *node) Create(ctx context.Context, name string, flags uint32, mode uint32, out *fuse.EntryOut) (*fs.Inode, fs.FileHandle, uint32, syscall.Errno) {
 	perm := os.FileMode(mode) & os.ModePerm
 
-	f, err := n.mount.backend.Open(ctx, n.childPath(name), openFlags(flags)|os.O_CREATE, perm)
+	f, err := n.mount.fs.Open(ctx, n.childPath(name), openFlags(flags)|os.O_CREATE, perm)
 	if err != nil {
 		return nil, nil, 0, fs.ToErrno(err)
 	}
 
 	child := n.NewInode(ctx, &node{mount: n.mount}, fs.StableAttr{Mode: syscall.S_IFREG})
-	n.mount.setAttr(Entry{Name: name, Mode: perm, ModTime: time.Now()}, &out.Attr)
+	n.mount.setAttr(ts_vfs.Entry{Name: name, Mode: perm, ModTime: time.Now()}, &out.Attr)
 
 	return child, &handle{file: f}, 0, 0
 }
@@ -282,25 +221,25 @@ func (n *node) Create(ctx context.Context, name string, flags uint32, mode uint3
 func (n *node) Mkdir(ctx context.Context, name string, mode uint32, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
 	perm := os.FileMode(mode) & os.ModePerm
 
-	if err := n.mount.backend.Mkdir(ctx, n.childPath(name), perm); err != nil {
+	if err := n.mount.fs.Mkdir(ctx, n.childPath(name), perm); err != nil {
 		return nil, fs.ToErrno(err)
 	}
 
 	child := n.NewInode(ctx, &node{mount: n.mount}, fs.StableAttr{Mode: syscall.S_IFDIR})
-	n.mount.setAttr(Entry{Name: name, Mode: os.ModeDir | perm, ModTime: time.Now()}, &out.Attr)
+	n.mount.setAttr(ts_vfs.Entry{Name: name, Mode: os.ModeDir | perm, ModTime: time.Now()}, &out.Attr)
 
 	return child, 0
 }
 
 func (n *node) Unlink(ctx context.Context, name string) syscall.Errno {
-	if err := n.mount.backend.Remove(ctx, n.childPath(name)); err != nil {
+	if err := n.mount.fs.Remove(ctx, n.childPath(name)); err != nil {
 		return fs.ToErrno(err)
 	}
 	return 0
 }
 
 func (n *node) Rmdir(ctx context.Context, name string) syscall.Errno {
-	if err := n.mount.backend.Remove(ctx, n.childPath(name)); err != nil {
+	if err := n.mount.fs.Remove(ctx, n.childPath(name)); err != nil {
 		return fs.ToErrno(err)
 	}
 	return 0
@@ -316,15 +255,17 @@ func (n *node) Rename(ctx context.Context, name string, newParent fs.InodeEmbedd
 		return syscall.EXDEV
 	}
 
-	if err := n.mount.backend.Rename(ctx, n.childPath(name), target.childPath(newName)); err != nil {
+	if err := n.mount.fs.Rename(ctx, n.childPath(name), target.childPath(newName)); err != nil {
 		return fs.ToErrno(err)
 	}
 	return 0
 }
 
+// handle is one open file. The mutex is here because the kernel dispatches
+// reads and writes on the same handle concurrently.
 type handle struct {
 	mu   sync.Mutex
-	file File
+	file ts_vfs.File
 }
 
 var (
@@ -374,7 +315,7 @@ func (h *handle) Release(ctx context.Context) syscall.Errno {
 	return 0
 }
 
-func (m *mount) setAttr(e Entry, out *fuse.Attr) {
+func (m *mount) setAttr(e ts_vfs.Entry, out *fuse.Attr) {
 	out.Mode = fileType(e.Mode) | uint32(e.Mode.Perm())
 	out.Size = uint64(e.Size)
 	out.Blocks = uint64((e.Size + 511) / 512)
@@ -396,139 +337,9 @@ func fileType(mode os.FileMode) uint32 {
 	return syscall.S_IFREG
 }
 
-// openFlags converts kernel open flags for the backend. O_APPEND is stripped
-// because the kernel already resolves appends into absolute offsets, and
-// honouring it a second time would write past the end.
+// openFlags converts kernel open flags. O_APPEND is stripped because the
+// kernel already resolves appends into absolute offsets, and honouring it a
+// second time would write past the end.
 func openFlags(flags uint32) int {
 	return int(flags) &^ syscall.O_APPEND
-}
-
-
-type OSBackend struct {
-	root string
-}
-
-var _ Backend = (*OSBackend)(nil)
-
-func NewOSBackend(root string) *OSBackend {
-	abs, _ := filepath.Abs(root)
-	return &OSBackend{root: abs}
-}
-
-// real maps a virtual path onto disk, refusing anything that escapes the root.
-func (b *OSBackend) real(p string) (string, error) {
-	clean := path.Clean("/" + strings.TrimPrefix(p, "/"))
-	real := filepath.Join(b.root, filepath.FromSlash(clean))
-
-	if real != b.root && !strings.HasPrefix(real, b.root+string(os.PathSeparator)) {
-		return "", os.ErrPermission
-	}
-
-	return real, nil
-}
-
-func (b *OSBackend) Stat(ctx context.Context, p string) (Entry, error) {
-	real, err := b.real(p)
-	if err != nil {
-		return Entry{}, err
-	}
-
-	info, err := os.Stat(real)
-	if err != nil {
-		return Entry{}, err
-	}
-
-	return entryFrom(info), nil
-}
-
-func (b *OSBackend) ReadDir(ctx context.Context, p string) ([]Entry, error) {
-	real, err := b.real(p)
-	if err != nil {
-		return nil, err
-	}
-
-	dirents, err := os.ReadDir(real)
-	if err != nil {
-		return nil, err
-	}
-
-	entries := make([]Entry, 0, len(dirents))
-	for _, d := range dirents {
-		info, err := d.Info()
-		if err != nil {
-			continue
-		}
-		entries = append(entries, entryFrom(info))
-	}
-
-	return entries, nil
-}
-
-func (b *OSBackend) Open(ctx context.Context, p string, flags int, perm os.FileMode) (File, error) {
-	real, err := b.real(p)
-	if err != nil {
-		return nil, err
-	}
-
-	if perm == 0 {
-		perm = 0o644
-	}
-
-	return os.OpenFile(real, flags, perm)
-}
-
-func (b *OSBackend) Mkdir(ctx context.Context, p string, perm os.FileMode) error {
-	real, err := b.real(p)
-	if err != nil {
-		return err
-	}
-
-	if perm == 0 {
-		perm = 0o755
-	}
-
-	return os.Mkdir(real, perm)
-}
-
-func (b *OSBackend) Remove(ctx context.Context, p string) error {
-	real, err := b.real(p)
-	if err != nil {
-		return err
-	}
-
-	return os.Remove(real)
-}
-
-func (b *OSBackend) Rename(ctx context.Context, oldPath, newPath string) error {
-	oldReal, err := b.real(oldPath)
-	if err != nil {
-		return err
-	}
-
-	newReal, err := b.real(newPath)
-	if err != nil {
-		return err
-	}
-
-	return os.Rename(oldReal, newReal)
-}
-
-func (b *OSBackend) Truncate(ctx context.Context, p string, size int64) error {
-	real, err := b.real(p)
-	if err != nil {
-		return err
-	}
-
-	return os.Truncate(real, size)
-}
-
-func (b *OSBackend) Close() error { return nil }
-
-func entryFrom(info os.FileInfo) Entry {
-	return Entry{
-		Name:    info.Name(),
-		Size:    info.Size(),
-		Mode:    info.Mode(),
-		ModTime: info.ModTime(),
-	}
 }
