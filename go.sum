@@ -98,6 +98,8 @@ github.com/google/nftables v0.2.1-0.20240414091927-5e242ec57806 h1:wG8RYIyctLhdF
 github.com/google/nftables v0.2.1-0.20240414091927-5e242ec57806/go.mod h1:Beg6V6zZ3oEn0JuiUQ4wqwuyqqzasOltcoXPtgLbFp4=
 github.com/google/uuid v1.6.0 h1:NIvaJDMOsjHA8n1jAhLSgzrAzy1Hgr+hNrb57e+94F0=
 github.com/google/uuid v1.6.0/go.mod h1:TIyPZe4MgqvfeYDBFedMoGGpEw/LqOeaOT+nhxU+yHo=
+github.com/hanwen/go-fuse/v2 v2.11.0 h1:CGVkJh9gRz0pTRMADNcqdFl3ec/5QbE/Vx1Gl7ESozM=
+github.com/hanwen/go-fuse/v2 v2.11.0/go.mod h1:aU7NkGYZUmuJrZapoI3mEcNve7PZTySUOLBuch/vR6U=
 github.com/hdevalence/ed25519consensus v0.2.0 h1:37ICyZqdyj0lAZ8P4D1d1id3HqbbG1N3iBb1Tb4rdcU=
 github.com/hdevalence/ed25519consensus v0.2.0/go.mod h1:w3BHWjwJbFU29IRHL1Iqkw3sus+7FctEyM4RqDxYNzo=
 github.com/huin/goupnp v1.3.0 h1:UvLUlWDNpoUdYzb2TCn+MuTWtcjXKSza2n6CBdQ0xXc=
