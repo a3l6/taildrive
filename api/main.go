@@ -53,7 +53,7 @@ func main() {
 		fmt.Println(err)
 	}
 
-	registry.init()
+	registry.init(cfg)
 
 	generateAvailableProtocols(peers, *cfg)
 

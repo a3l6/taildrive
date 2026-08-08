@@ -1,2 +1,3 @@
 port = 8080
 tailscale_socket = "/var/run/tailscale/tailscaled.sock"
+protocols_enabled = ["SFTP"]

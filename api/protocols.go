@@ -13,7 +13,7 @@ import (
 type ProtocolConfig interface {
 	Name() string
 	Enabled() bool
-	ToggleEnabled()
+	SetEnabled(bool)
 	Public() map[string]any
 	Run(ctx context.Context) error
 }
@@ -65,13 +65,14 @@ func (r *Registry) Start(name string, s ProtocolConfig) error {
 			r.muregistrar.Unlock()
 		}()
 
+		if ok := r.Get(name); ok != nil {
+			ok.SetEnabled(true)
+		}
+
 		if err := s.Run(ctx); err != nil && err != context.Canceled {
 			log.Printf("%s service failed: %s", name, err)
-		} else {
-			for _, config := range r.configs {
-				if config.Name() == name {
-					config.ToggleEnabled()
-				}
+			if ok := r.Get(name); ok != nil {
+				ok.SetEnabled(true)
 			}
 		}
 	}()
@@ -84,7 +85,7 @@ func (r *Registry) Stop(name string) {
 	r.muregistrar.Lock()
 	for _, config := range r.configs {
 		if config.Name() == name {
-			config.ToggleEnabled()
+			config.SetEnabled(false)
 		}
 	}
 
@@ -99,6 +100,10 @@ func (r *Registry) StopAll() {
 	r.muregistrar.Lock()
 	for _, cancel := range r.registrar {
 		cancel()
+	}
+
+	for _, config := range r.configs {
+		config.SetEnabled(false)
 	}
 	r.muregistrar.Unlock()
 	r.wgregistrar.Wait()
@@ -212,21 +217,29 @@ type GenericProtocolServer struct {
 
 func (s GenericProtocolServer) Name() string                   { return s.name }
 func (s GenericProtocolServer) Enabled() bool                  { return s.enabled }
-func (s *GenericProtocolServer) ToggleEnabled()                { s.enabled = !s.enabled }
+func (s *GenericProtocolServer) SetEnabled(x bool)             { s.enabled = x }
 func (s GenericProtocolServer) Public() map[string]any         { return s.public }
 func (s *GenericProtocolServer) Run(ctx context.Context) error { return s.run(ctx) }
 
 var SFTPProtocolServer GenericProtocolServer = GenericProtocolServer{
 	name:    "SFTP",
-	enabled: true, // TODO: Hook this up to config struct
+	enabled: false,
 	public:  make(map[string]any),
 	run:     tdsftp.Run,
 }
 
-func (r *Registry) init() {
+func (r *Registry) init(cfg *Config) {
 	r.Register(&SFTPProtocolServer)
 
-	if SFTPProtocolServer.enabled {
-		r.Start("SFTP", &SFTPProtocolServer)
+	mapping := make(map[string]func())
+	mapping[SFTPProtocolServer.name] = func() { registry.Start(SFTPProtocolServer.name, &SFTPProtocolServer) }
+
+	log.Println(cfg.ProtocolsEnabled)
+	for _, val := range cfg.ProtocolsEnabled {
+		if fn, ok := mapping[val]; ok {
+			log.Println("Enabling ", val)
+			fn()
+		}
 	}
+
 }
