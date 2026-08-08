@@ -15,6 +15,8 @@ import (
 	"golang.org/x/crypto/ssh"
 	"tailscale.com/client/local"
 	"tailscale.com/tsnet"
+
+	ts_vfs "a3l6/m/vfs"
 )
 
 func Run(ctx context.Context) error {
@@ -82,7 +84,7 @@ func handleConn(ctx context.Context, nConn net.Conn, sshConfig *ssh.ServerConfig
 		login = who.UserProfile.LoginName
 	}
 
-	fs := newVFS(mountsFor(login))
+	fs := ts_vfs.NewVFS(mountsFor(login))
 
 	sconn, chans, reqs, err := ssh.NewServerConn(nConn, sshConfig)
 	if err != nil {

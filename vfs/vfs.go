@@ -1,4 +1,4 @@
-package taildrive_sftp
+package taildrive_vfs
 
 import (
 	"io"
@@ -15,7 +15,7 @@ type vfs struct {
 	mounts map[string]string // cleaned virtual path -> absolute dir
 }
 
-func newVFS(m map[string]string) *vfs {
+func NewVFS(m map[string]string) *vfs {
 	clean := make(map[string]string, len(m))
 	for v, r := range m {
 		vp := path.Clean("/" + strings.Trim(v, "/"))
