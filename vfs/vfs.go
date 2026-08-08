@@ -24,8 +24,7 @@ type FS interface {
 	Truncate(ctx context.Context, p string, size int64) error
 }
 
-// File is an open file. Offsets are absolute, so implementations never track a
-// cursor of their own.
+//Offsets are absolute, so implementations never track a cursor of their own.
 type File interface {
 	io.ReaderAt
 	io.WriterAt
