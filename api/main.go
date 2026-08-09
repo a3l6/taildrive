@@ -1,6 +1,7 @@
 package main
 
 import (
+	tdvfs "a3l6/m/vfs"
 	"a3l6/m/webdav"
 	"context"
 	"encoding/json"
@@ -38,8 +39,14 @@ func handleListPeers(peers []PeerShares) http.HandlerFunc {
 	}
 }
 
+// TODO: implement the loading from config for filesystem
+var filesystem tdvfs.FS = tdvfs.NewVFS(map[string]string{
+	"/projects": "/tmp",
+})
+
 func main() {
-	taildrive_webdav.Run()
+	taildrive_webdav.Run(filesystem)
+	return
 
 	cfg, err := loadConfig("./config.toml")
 	if err != nil {

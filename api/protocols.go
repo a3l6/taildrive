@@ -2,6 +2,7 @@ package main
 
 import (
 	tdsftp "a3l6/m/sftp"
+	tdvfs "a3l6/m/vfs"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -22,7 +23,7 @@ type Protocol interface {
 	Enabled() bool
 	SetEnabled(bool)
 	Public() map[string]any
-	Run(ctx context.Context) error
+	Run(context.Context, tdvfs.FS) error
 }
 
 type Registry struct {
@@ -78,7 +79,7 @@ func (r *Registry) Start(name string, s Protocol) error {
 			ok.SetEnabled(true)
 		}
 
-		if err := s.Run(ctx); err != nil && err != context.Canceled {
+		if err := s.Run(ctx, filesystem); err != nil && err != context.Canceled {
 			log.Printf("protocol: %s service failed: %s", name, err)
 			if ok := r.Get(name); ok != nil {
 				ok.SetEnabled(true)
@@ -221,14 +222,16 @@ type GenericProtocolServer struct {
 	name    string
 	enabled bool
 	public  map[string]any
-	run     func(context.Context) error
+	run     func(context.Context, tdvfs.FS) error
 }
 
-func (s GenericProtocolServer) Name() string                   { return s.name }
-func (s GenericProtocolServer) Enabled() bool                  { return s.enabled }
-func (s *GenericProtocolServer) SetEnabled(x bool)             { s.enabled = x }
-func (s GenericProtocolServer) Public() map[string]any         { return s.public }
-func (s *GenericProtocolServer) Run(ctx context.Context) error { return s.run(ctx) }
+func (s GenericProtocolServer) Name() string           { return s.name }
+func (s GenericProtocolServer) Enabled() bool          { return s.enabled }
+func (s *GenericProtocolServer) SetEnabled(x bool)     { s.enabled = x }
+func (s GenericProtocolServer) Public() map[string]any { return s.public }
+func (s *GenericProtocolServer) Run(ctx context.Context, fs tdvfs.FS) error {
+	return s.run(ctx, fs)
+}
 
 var SFTPProtocolServer GenericProtocolServer = GenericProtocolServer{
 	name:    "SFTP",

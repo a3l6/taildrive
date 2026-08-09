@@ -16,10 +16,14 @@ import (
 	"tailscale.com/client/local"
 	"tailscale.com/tsnet"
 
-	ts_vfs "a3l6/m/vfs"
+	tdvfs "a3l6/m/vfs"
 )
 
-func Run(ctx context.Context) error {
+var fs tdvfs.FS
+
+func Run(ctx context.Context, vfs tdvfs.FS) error {
+	fs = vfs
+
 	srv := &tsnet.Server{
 		Hostname: "sftp-vfs",
 		// AuthKey:  // os.Getenv("TS_AUTHKEY"),
@@ -79,12 +83,14 @@ func Run(ctx context.Context) error {
 }
 
 func handleConn(ctx context.Context, nConn net.Conn, sshConfig *ssh.ServerConfig, lc *local.Client) {
-	login := "anonymous"
-	if who, err := lc.WhoIs(ctx, nConn.RemoteAddr().String()); err == nil {
-		login = who.UserProfile.LoginName
-	}
+	/*
+		login := "anonymous"
+		if who, err := lc.WhoIs(ctx, nConn.RemoteAddr().String()); err == nil {
+			login = who.UserProfile.LoginName
+		}
+	*/
 
-	h := handlers{fs: ts_vfs.NewVFS(mountsFor(login))}
+	h := handlers{fs: fs}
 
 	sconn, chans, reqs, err := ssh.NewServerConn(nConn, sshConfig)
 	if err != nil {

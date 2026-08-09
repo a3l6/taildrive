@@ -24,7 +24,7 @@ type FS interface {
 	Truncate(ctx context.Context, p string, size int64) error
 }
 
-//Offsets are absolute, so implementations never track a cursor of their own.
+// Offsets are absolute, so implementations never track a cursor of their own.
 type File interface {
 	io.ReaderAt
 	io.WriterAt
@@ -38,14 +38,14 @@ type Entry struct {
 	ModTime time.Time
 }
 
-type vfs struct {
+type Defaultvfs struct {
 	mounts  map[string]string // cleaned virtual path -> absolute dir
 	started time.Time
 }
 
-var _ FS = (*vfs)(nil)
+var _ FS = (*Defaultvfs)(nil)
 
-func NewVFS(m map[string]string) *vfs {
+func NewVFS(m map[string]string) *Defaultvfs {
 	clean := make(map[string]string, len(m))
 	for v, r := range m {
 		vp := path.Clean("/" + strings.Trim(v, "/"))
@@ -53,7 +53,7 @@ func NewVFS(m map[string]string) *vfs {
 		clean[vp] = rp
 	}
 
-	return &vfs{mounts: clean, started: time.Now()}
+	return &Defaultvfs{mounts: clean, started: time.Now()}
 }
 
 type resolved struct {
@@ -63,7 +63,7 @@ type resolved struct {
 	isVirtual bool
 }
 
-func (fs *vfs) resolve(virtual string) (resolved, error) {
+func (fs *Defaultvfs) resolve(virtual string) (resolved, error) {
 	clean := path.Clean("/" + strings.TrimPrefix(virtual, "/"))
 
 	best := ""
@@ -96,7 +96,7 @@ func (fs *vfs) resolve(virtual string) (resolved, error) {
 
 // writable resolves p and refuses the synthesised tree and the mount roots
 // themselves, which no protocol may rename or delete.
-func (fs *vfs) writable(p string) (resolved, error) {
+func (fs *Defaultvfs) writable(p string) (resolved, error) {
 	res, err := fs.resolve(p)
 	if err != nil {
 		return resolved{}, err
@@ -109,7 +109,7 @@ func (fs *vfs) writable(p string) (resolved, error) {
 	return res, nil
 }
 
-func (fs *vfs) isAncestor(clean string) bool {
+func (fs *Defaultvfs) isAncestor(clean string) bool {
 	prefix := clean + "/"
 
 	for vp := range fs.mounts {
@@ -121,7 +121,7 @@ func (fs *vfs) isAncestor(clean string) bool {
 	return false
 }
 
-func (fs *vfs) children(clean string) []Entry {
+func (fs *Defaultvfs) children(clean string) []Entry {
 	prefix := "/"
 	if clean != "/" {
 		prefix = clean + "/"
@@ -151,11 +151,11 @@ func (fs *vfs) children(clean string) []Entry {
 	return out
 }
 
-func (fs *vfs) virtualDir(name string) Entry {
+func (fs *Defaultvfs) virtualDir(name string) Entry {
 	return Entry{Name: name, Mode: os.ModeDir | 0o555, ModTime: fs.started}
 }
 
-func (fs *vfs) Stat(ctx context.Context, p string) (Entry, error) {
+func (fs *Defaultvfs) Stat(ctx context.Context, p string) (Entry, error) {
 	res, err := fs.resolve(p)
 	if err != nil {
 		return Entry{}, err
@@ -173,7 +173,7 @@ func (fs *vfs) Stat(ctx context.Context, p string) (Entry, error) {
 	return entryFrom(info), nil
 }
 
-func (fs *vfs) ReadDir(ctx context.Context, p string) ([]Entry, error) {
+func (fs *Defaultvfs) ReadDir(ctx context.Context, p string) ([]Entry, error) {
 	res, err := fs.resolve(p)
 	if err != nil {
 		return nil, err
@@ -200,7 +200,7 @@ func (fs *vfs) ReadDir(ctx context.Context, p string) ([]Entry, error) {
 	return entries, nil
 }
 
-func (fs *vfs) Open(ctx context.Context, p string, flags int, perm os.FileMode) (File, error) {
+func (fs *Defaultvfs) Open(ctx context.Context, p string, flags int, perm os.FileMode) (File, error) {
 	res, err := fs.resolve(p)
 	if err != nil {
 		return nil, err
@@ -217,7 +217,7 @@ func (fs *vfs) Open(ctx context.Context, p string, flags int, perm os.FileMode) 
 	return os.OpenFile(res.real, flags, perm)
 }
 
-func (fs *vfs) Mkdir(ctx context.Context, p string, perm os.FileMode) error {
+func (fs *Defaultvfs) Mkdir(ctx context.Context, p string, perm os.FileMode) error {
 	res, err := fs.writable(p)
 	if err != nil {
 		return err
@@ -230,7 +230,7 @@ func (fs *vfs) Mkdir(ctx context.Context, p string, perm os.FileMode) error {
 	return os.Mkdir(res.real, perm)
 }
 
-func (fs *vfs) Remove(ctx context.Context, p string) error {
+func (fs *Defaultvfs) Remove(ctx context.Context, p string) error {
 	res, err := fs.writable(p)
 	if err != nil {
 		return err
@@ -239,7 +239,7 @@ func (fs *vfs) Remove(ctx context.Context, p string) error {
 	return os.Remove(res.real)
 }
 
-func (fs *vfs) Rename(ctx context.Context, oldPath, newPath string) error {
+func (fs *Defaultvfs) Rename(ctx context.Context, oldPath, newPath string) error {
 	from, err := fs.writable(oldPath)
 	if err != nil {
 		return err
@@ -253,7 +253,7 @@ func (fs *vfs) Rename(ctx context.Context, oldPath, newPath string) error {
 	return os.Rename(from.real, to.real)
 }
 
-func (fs *vfs) Truncate(ctx context.Context, p string, size int64) error {
+func (fs *Defaultvfs) Truncate(ctx context.Context, p string, size int64) error {
 	res, err := fs.writable(p)
 	if err != nil {
 		return err

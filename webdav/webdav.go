@@ -4,13 +4,14 @@ import (
 	"log"
 	"net/http"
 
+	tdvfs "a3l6/m/vfs"
 	"golang.org/x/net/webdav"
 )
 
-func Run() {
+func Run(fs tdvfs.FS) {
 	handler := &webdav.Handler{
 		Prefix:     "/",
-		FileSystem: webdav.Dir("./data"),
+		FileSystem: davFS{fs},
 		LockSystem: webdav.NewMemLS(),
 		Logger: func(r *http.Request, err error) {
 			if err != nil {
