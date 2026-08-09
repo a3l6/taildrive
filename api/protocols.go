@@ -3,6 +3,7 @@ package main
 import (
 	tdsftp "a3l6/m/sftp"
 	tdvfs "a3l6/m/vfs"
+	tdwebdav "a3l6/m/webdav"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -240,11 +241,20 @@ var SFTPProtocolServer GenericProtocolServer = GenericProtocolServer{
 	run:     tdsftp.Run,
 }
 
+var WEBDAVProtocolServer GenericProtocolServer = GenericProtocolServer{
+	name:    "WEBDAV",
+	enabled: false,
+	public:  make(map[string]any),
+	run:     tdwebdav.Run,
+}
+
 func (r *Registry) init(cfg *Config) {
 	r.Register(&SFTPProtocolServer)
+	r.Register(&WEBDAVProtocolServer)
 
 	mapping := make(map[string]func())
 	mapping[SFTPProtocolServer.name] = func() { registry.Start(SFTPProtocolServer.name, &SFTPProtocolServer) }
+	mapping[WEBDAVProtocolServer.name] = func() { registry.Start(WEBDAVProtocolServer.name, &WEBDAVProtocolServer) }
 
 	log.Println("protocol: enabled protocols = ", cfg.ProtocolConfig.ProtocolsEnabled)
 	for _, val := range cfg.ProtocolConfig.ProtocolsEnabled {
