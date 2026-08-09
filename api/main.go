@@ -2,7 +2,6 @@ package main
 
 import (
 	tdvfs "a3l6/m/vfs"
-	"a3l6/m/webdav"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -45,9 +44,6 @@ var filesystem tdvfs.FS = tdvfs.NewVFS(map[string]string{
 })
 
 func main() {
-	taildrive_webdav.Run(filesystem)
-	return
-
 	cfg, err := loadConfig("./config.toml")
 	if err != nil {
 		log.Fatal(err)

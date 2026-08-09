@@ -6,5 +6,4 @@ enable_fuse=true
 auto_protocols=true
 auto_protocol_style="compatibility"
 auto_generate_delay=60
-protocols_enabled=["SFTP"]
-
+protocols_enabled=["SFTP", "WEBDAV"]
