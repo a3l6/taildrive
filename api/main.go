@@ -1,7 +1,7 @@
 package main
 
 import (
-	"a3l6/m/fuse"
+	"a3l6/m/webdav"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -39,6 +39,7 @@ func handleListPeers(peers []PeerShares) http.HandlerFunc {
 }
 
 func main() {
+	taildrive_webdav.Run()
 
 	cfg, err := loadConfig("./config.toml")
 	if err != nil {
