@@ -1,6 +1,7 @@
 package main
 
 import (
+	"a3l6/m/fuse"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -38,6 +39,7 @@ func handleListPeers(peers []PeerShares) http.HandlerFunc {
 }
 
 func main() {
+
 	cfg, err := loadConfig("./config.toml")
 	if err != nil {
 		log.Fatal(err)
