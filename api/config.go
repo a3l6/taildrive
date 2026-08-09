@@ -49,6 +49,7 @@ type Config struct {
 	TailscaleSocket string         `toml:"tailscale_socket"`
 	Shares          []Share        `toml:"share"`
 	ProtocolConfig  protocolConfig `toml:"protocol"`
+	FuseEnabled     bool           `toml:"enable_fuse"`
 }
 
 func (c *Config) applyDefaults() {
