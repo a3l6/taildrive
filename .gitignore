@@ -33,3 +33,6 @@ go.work.sum
 
 #ts-net
 host_key
+
+./dav/
+./data/
