@@ -1,6 +1,7 @@
 package main
 
 import (
+	"a3l6/m/config"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -22,7 +23,7 @@ func safePath(shareRoot, requestedPath string) (string, error) {
 	return joined, nil
 }
 
-func handleListShares(shares map[string]Share) http.HandlerFunc {
+func handleListShares(shares map[string]config.Share) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		type ShareResponse struct {
 			Name     string `json:"name"`

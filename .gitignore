@@ -36,3 +36,4 @@ host_key
 
 ./dav/
 ./data/
+./test/

@@ -1,4 +1,4 @@
-package taildrive_sftp
+package sftp
 
 import (
 	"io"
@@ -7,12 +7,12 @@ import (
 
 	"github.com/pkg/sftp"
 
-	ts_vfs "a3l6/m/vfs"
+	"a3l6/m/vfs"
 )
 
 // handlers maps the sftp request handlers onto a vfs.FS.
 type handlers struct {
-	fs ts_vfs.FS
+	fs vfs.FS
 }
 
 var (
@@ -84,7 +84,7 @@ func (h handlers) Filelist(r *sftp.Request) (sftp.ListerAt, error) {
 }
 
 type entryInfo struct {
-	e ts_vfs.Entry
+	e vfs.Entry
 }
 
 func (i entryInfo) Name() string       { return i.e.Name }

@@ -4,7 +4,6 @@ go 1.26.4
 
 require (
 	github.com/BurntSushi/toml v1.6.0
-	github.com/go-logr/logr v1.4.3
 	github.com/hanwen/go-fuse/v2 v2.11.0
 	github.com/pkg/sftp v1.13.6
 	golang.org/x/crypto v0.53.0

@@ -1,4 +1,4 @@
-package taildrive_vfs
+package vfs
 
 import (
 	"context"

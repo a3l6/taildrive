@@ -1,16 +1,18 @@
-package taildrive_webdav
+package webdav
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"net/http"
 
-	tdvfs "a3l6/m/vfs"
+	"a3l6/m/config"
+	"a3l6/m/vfs"
 
 	"golang.org/x/net/webdav"
 )
 
-func Run(ctx context.Context, fs tdvfs.FS) error {
+func Run(ctx context.Context, fs vfs.FS) error {
 	handler := &webdav.Handler{
 		Prefix:     "/",
 		FileSystem: davFS{fs},
@@ -21,8 +23,13 @@ func Run(ctx context.Context, fs tdvfs.FS) error {
 			}
 		},
 	}
-	// TODO: change this port to be from config
-	srv := &http.Server{Addr: ":8081", Handler: handler}
+
+	cfg, err := config.LoadConfig("./config.toml")
+	if err != nil {
+		cfg.ApplyDefaults()
+	}
+
+	srv := &http.Server{Addr: fmt.Sprintf(":%d", cfg.Webdav.Port), Handler: handler}
 
 	runCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -34,7 +41,7 @@ func Run(ctx context.Context, fs tdvfs.FS) error {
 		srv.Shutdown(context.Background())
 	}()
 
-	log.Println("serving on :8080")
+	log.Println("webdav: listening on port ", cfg.Webdav.Port)
 	if err := srv.ListenAndServe(); err != http.ErrServerClosed {
 		return err
 	}

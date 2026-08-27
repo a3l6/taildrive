@@ -1,6 +1,7 @@
-package main
+package ts
 
 import (
+	"a3l6/m/config"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -21,7 +22,30 @@ type RemoteShare struct {
 	ReadOnly bool   `json:"read_only"`
 }
 
-func discoverPeers(ctx context.Context, cfg *Config) ([]PeerShares, error) {
+func ListPeers(ctx context.Context, cfg *config.Config) ([]string, error) {
+	client := &local.Client{
+		Socket: cfg.TailscaleSocket,
+	}
+
+	st, err := client.Status(ctx)
+	if err != nil {
+		return []string{}, err
+	}
+
+	peers := make([]string, len(st.Peer))
+
+	for _, peer := range st.Peer {
+		for _, addr := range peer.TailscaleIPs {
+			if addr.Is4() && addr.String() != "" {
+				peers = append(peers, addr.String())
+			}
+		}
+	}
+
+	return peers, nil
+}
+
+func DiscoverPeers(ctx context.Context, cfg *config.Config) ([]PeerShares, error) {
 	client := &local.Client{
 		Socket: cfg.TailscaleSocket,
 	}
@@ -103,7 +127,7 @@ func discoverPeers(ctx context.Context, cfg *Config) ([]PeerShares, error) {
 
 }
 
-func getTailscaleIP(ctx context.Context, cfg *Config) (string, error) {
+func GetTailscaleIP(ctx context.Context, cfg *config.Config) (string, error) {
 	client := &local.Client{
 		Socket: cfg.TailscaleSocket,
 	}

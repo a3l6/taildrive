@@ -1,10 +1,11 @@
-package taildrive_sftp
+package sftp
 
 import (
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/pem"
+	"fmt"
 	"io"
 	"log"
 	"net"
@@ -16,16 +17,27 @@ import (
 	"tailscale.com/client/local"
 	"tailscale.com/tsnet"
 
-	tdvfs "a3l6/m/vfs"
+	"a3l6/m/config"
+	"a3l6/m/vfs"
 )
 
-var fs tdvfs.FS
+var fs vfs.FS
 
-func Run(ctx context.Context, vfs tdvfs.FS) error {
+func getHostname() string {
+	var lc local.Client
+	st, err := lc.Status(context.Background())
+	if err != nil {
+		return ""
+	}
+
+	return st.Self.HostName
+}
+
+func Run(ctx context.Context, vfs vfs.FS) error {
 	fs = vfs
 
 	srv := &tsnet.Server{
-		Hostname: "sftp-vfs",
+		Hostname: fmt.Sprintf("%s-sftp-vfs", getHostname()),
 		// AuthKey:  // os.Getenv("TS_AUTHKEY"),
 	}
 	defer srv.Close()
@@ -46,7 +58,12 @@ func Run(ctx context.Context, vfs tdvfs.FS) error {
 
 	sshConfig.AddHostKey(hostKey)
 
-	ln, err := srv.Listen("tcp", ":22")
+	cfg, err := config.LoadConfig("./config.toml")
+	if err != nil {
+		cfg.ApplyDefaults()
+	}
+
+	ln, err := srv.Listen("tcp", fmt.Sprintf(":%d", cfg.Sftp.Port))
 	if err != nil {
 		return err
 	}

@@ -1,7 +1,9 @@
 package main
 
 import (
-	tdvfs "a3l6/m/vfs"
+	"a3l6/m/common/ts"
+	"a3l6/m/config"
+	"a3l6/m/vfs"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -31,7 +33,7 @@ func handleHealth(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]string{"hostname": hostname})
 }
 
-func handleListPeers(peers []PeerShares) http.HandlerFunc {
+func handleListPeers(peers []ts.PeerShares) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(peers)
@@ -39,21 +41,21 @@ func handleListPeers(peers []PeerShares) http.HandlerFunc {
 }
 
 // TODO: implement the loading from config for filesystem
-var filesystem tdvfs.FS = tdvfs.NewVFS(map[string]string{
+var filesystem vfs.FS = vfs.NewVFS(map[string]string{
 	"/projects": "/tmp",
 })
 
 func main() {
-	cfg, err := loadConfig("./config.toml")
+	cfg, err := config.LoadConfig("./config.toml")
 	if err != nil {
 		log.Fatal(err)
 		return
 	}
-	cfg.applyDefaults()
+	cfg.ApplyDefaults()
 
 	localShares := cfg.ShareMap()
 
-	peers, err := discoverPeers(context.Background(), cfg)
+	peers, err := ts.DiscoverPeers(context.Background(), cfg)
 	if err != nil {
 		fmt.Println(err)
 	}
@@ -82,7 +84,7 @@ func main() {
 	mux.HandleFunc("GET /shares", handleListShares(localShares))
 	mux.HandleFunc("GET /health", handleHealth)
 
-	ip, err := getTailscaleIP(context.Background(), cfg)
+	ip, err := ts.GetTailscaleIP(context.Background(), cfg)
 	if err != nil {
 		fmt.Println(err)
 		return

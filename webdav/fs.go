@@ -1,4 +1,4 @@
-package taildrive_webdav
+package webdav
 
 import (
 	"context"
@@ -10,12 +10,12 @@ import (
 
 	"golang.org/x/net/webdav"
 
-	tdvfs "a3l6/m/vfs"
+	"a3l6/m/vfs"
 )
 
 // davFS maps the webdav filesystem calls onto a vfs.FS.
 type davFS struct {
-	fs tdvfs.FS
+	fs vfs.FS
 }
 
 var _ webdav.FileSystem = davFS{}
@@ -70,10 +70,10 @@ func (d davFS) Stat(ctx context.Context, name string) (os.FileInfo, error) {
 // davFile carries the cursor webdav expects on top of the absolute offsets vfs
 // exposes. A nil f means the path is a directory, which is list only.
 type davFile struct {
-	fs   tdvfs.FS
+	fs   vfs.FS
 	ctx  context.Context
 	name string
-	f    tdvfs.File
+	f    vfs.File
 
 	off     int64
 	entries []os.FileInfo
@@ -179,7 +179,7 @@ func (f *davFile) Close() error {
 }
 
 type entryInfo struct {
-	e tdvfs.Entry
+	e vfs.Entry
 }
 
 func (i entryInfo) Name() string       { return i.e.Name }
