@@ -8,7 +8,6 @@ import (
 type GenericProtocolServer struct {
 	Name    string
 	Enabled bool
-	Ip      string
 	Port    int
 	Run     func(context.Context, vfs.FS) error
 }
