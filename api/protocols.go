@@ -127,19 +127,30 @@ func (r *Registry) UnRegister(c *types.GenericProtocolServer) {
 
 func (r *Registry) Register(c *types.GenericProtocolServer) { r.configs = append(r.configs, c) }
 
-func handleConfig(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
+func handleConfig(apiHost string) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
 
-	out := make([]map[string]any, 0, len(registry.configs))
-	for _, c := range registry.configs {
-		out = append(out, map[string]any{
-			"name":    c.Name,
-			"enabled": c.Enabled,
-			"ip":      c.Ip,
-			"port":    c.Port,
-		})
+		out := make([]map[string]any, 0, len(registry.configs))
+		for _, c := range registry.configs {
+			out = append(out, map[string]any{
+				"name":    c.Name,
+				"enabled": c.Enabled,
+				"host":    protocolHost(c.Name, apiHost),
+				"port":    c.Port,
+			})
+		}
+		json.NewEncoder(w).Encode(map[string]any{"protocols": out})
 	}
-	json.NewEncoder(w).Encode(map[string]any{"protocols": out})
+}
+
+// protocolHost is the tailnet host a client should dial to reach the named
+// protocol. WebDAV listens on the API host; SFTP runs on its own tsnet node.
+func protocolHost(name, apiHost string) string {
+	if name == SFTPProtocolServer.Name {
+		return ts.SFTPHostname(apiHost)
+	}
+	return apiHost
 }
 
 func generateAvailableProtocols(peers []ts.PeerShares, cfg conf.Config) map[string]int {

@@ -78,8 +78,14 @@ func main() {
 		}()
 	}
 
+	apiHost, err := ts.SelfHostname(context.Background(), cfg)
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+
 	mux := http.NewServeMux()
-	mux.HandleFunc("GET /config", handleConfig)
+	mux.HandleFunc("GET /config", handleConfig(apiHost))
 	mux.HandleFunc("GET /peers", handleListPeers(peers))
 	mux.HandleFunc("GET /shares", handleListShares(localShares))
 	mux.HandleFunc("GET /health", handleHealth)

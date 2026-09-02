@@ -144,3 +144,23 @@ func GetTailscaleIP(ctx context.Context, cfg *config.Config) (string, error) {
 
 	return "", fmt.Errorf("no tailscale IPv4 address found")
 }
+
+// SelfHostname returns this node's short tailnet hostname (e.g. "mylaptop").
+func SelfHostname(ctx context.Context, cfg *config.Config) (string, error) {
+	client := &local.Client{
+		Socket: cfg.TailscaleSocket,
+	}
+	st, err := client.Status(ctx)
+	if err != nil {
+		return "", err
+	}
+
+	return st.Self.HostName, nil
+}
+
+// SFTPHostname is the tailnet hostname the SFTP server registers under, derived
+// from the host's short hostname. The SFTP server runs on its own tsnet node
+// (see sftp.Run), so it is not reachable at the API host's address.
+func SFTPHostname(base string) string {
+	return base + "-sftp-vfs"
+}

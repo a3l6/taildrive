@@ -17,6 +17,7 @@ import (
 	"tailscale.com/client/local"
 	"tailscale.com/tsnet"
 
+	"a3l6/m/common/ts"
 	"a3l6/m/config"
 	"a3l6/m/vfs"
 )
@@ -37,7 +38,7 @@ func Run(ctx context.Context, vfs vfs.FS) error {
 	fs = vfs
 
 	srv := &tsnet.Server{
-		Hostname: fmt.Sprintf("%s-sftp-vfs", getHostname()),
+		Hostname: ts.SFTPHostname(getHostname()),
 		// AuthKey:  // os.Getenv("TS_AUTHKEY"),
 	}
 	defer srv.Close()
