@@ -51,7 +51,7 @@ type node struct {
 func Mount(ctx context.Context, mountpoint string, fsys vfs.FS, opts Options) error {
 	opts.applyDefaults()
 
-	if err := os.Mkdir(mountpoint, 0o755); err != nil {
+	if err := os.MkdirAll(mountpoint, 0o755); err != nil {
 		return err
 	}
 
