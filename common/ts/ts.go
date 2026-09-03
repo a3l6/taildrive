@@ -22,21 +22,19 @@ type RemoteShare struct {
 	ReadOnly bool   `json:"read_only"`
 }
 
-func ListPeers(ctx context.Context, cfg *config.Config) ([]string, error) {
-	client := &local.Client{
-		Socket: cfg.TailscaleSocket,
-	}
+func ListPeers(ctx context.Context, socket string) ([]string, error) {
+	client := &local.Client{Socket: socket}
 
 	st, err := client.Status(ctx)
 	if err != nil {
-		return []string{}, err
+		return nil, err
 	}
 
-	peers := make([]string, len(st.Peer))
+	peers := make([]string, 0, len(st.Peer))
 
 	for _, peer := range st.Peer {
 		for _, addr := range peer.TailscaleIPs {
-			if addr.Is4() && addr.String() != "" {
+			if addr.Is4() {
 				peers = append(peers, addr.String())
 			}
 		}
