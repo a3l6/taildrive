@@ -1,8 +1,12 @@
 package main
 
 import (
-	"fmt"
+	"context"
 	"log"
+	"os"
+	"os/signal"
+	"sync"
+	"syscall"
 )
 
 func main() {
@@ -16,8 +20,28 @@ func main() {
 		log.Fatal("client: cannot load mounts: ", err)
 	}
 
-	fmt.Printf("client: server API port %d, %d mount(s) configured\n", cc.ServerPort, len(mounts))
-	for _, m := range mounts {
-		fmt.Printf("  %s\t%s\t%s\n", m.MountPoint, m.Peer, m.Protocol)
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	mgr := newMountManager(ctx, cc)
+	for _, rec := range mounts {
+		if err := mgr.Start(rec); err != nil {
+			log.Printf("client: %v", err)
+		}
 	}
+
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		pollConfig(ctx, mgr)
+	}()
+
+	go runREPL(ctx, &repl{mgr: mgr, stop: stop, mounts: mounts})
+
+	log.Printf("client: supervising %d mount(s); Ctrl-C to unmount", len(mounts))
+	<-ctx.Done()
+	log.Print("client: shutting down")
+	mgr.StopAll()
+	wg.Wait()
 }
