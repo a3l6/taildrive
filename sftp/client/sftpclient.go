@@ -51,6 +51,14 @@ func (f *FS) Close() error {
 	return f.conn.Close()
 }
 
+// Wait blocks until the SSH transport shuts down and returns the error that
+// closed it. Nothing else reports that a backend has died: the sftp client
+// keeps accepting calls and answering them with errors, so a mount sitting on
+// a dead connection looks healthy from the outside.
+func (f *FS) Wait() error {
+	return f.conn.Wait()
+}
+
 func (f *FS) Stat(ctx context.Context, p string) (vfs.Entry, error) {
 	info, err := f.client.Stat(p)
 	if err != nil {
