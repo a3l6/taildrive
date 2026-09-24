@@ -239,10 +239,20 @@ func (m *mountManager) supervise(ctx context.Context, am *activeMount) {
 		backoff = backoffMin
 		log.Printf("client: %s: mounted over %s", am.rec.MountPoint, strings.ToLower(p.Name))
 
-		err = fuse.Mount(ctx, am.rec.MountPoint, backend, fuse.Options{
+		// fuse.Mount only returns once the mountpoint itself goes away, so a
+		// backend whose transport dies is invisible to it: the mount stays up
+		// and fails every operation. watchBackend cancels mountCtx when that
+		// happens, which unmounts and drops us into the reconnect path below.
+		// It has to be a child of ctx so the ctx.Err() check underneath keeps
+		// meaning "the user is shutting us down" and nothing else.
+		mountCtx, cancelMount := context.WithCancel(ctx)
+		go watchBackend(mountCtx, am.rec.MountPoint, backend, cancelMount)
+
+		err = fuse.Mount(mountCtx, am.rec.MountPoint, backend, fuse.Options{
 			Name:     filepath.Base(am.rec.MountPoint),
 			ReadOnly: am.rec.ReadOnly,
 		})
+		cancelMount()
 		closeBackend(backend)
 
 		if ctx.Err() != nil {
@@ -289,6 +299,36 @@ func sleep(ctx context.Context, d time.Duration) bool {
 		return false
 	case <-t.C:
 		return true
+	}
+}
+
+// backendWaiter is a vfs.FS whose transport can report its own death. Like
+// closeBackend below this is a type assertion rather than a vfs.FS method:
+// sftpclient.FS has an SSH connection to watch, webdavclient.FS is stateless
+// HTTP and has nothing to say.
+type backendWaiter interface {
+	Wait() error
+}
+
+// watchBackend cancels a mount once its backend's transport dies. Backends
+// that cannot report liveness keep the old behaviour of staying mounted until
+// something unmounts them.
+func watchBackend(ctx context.Context, mountpoint string, b vfs.FS, cancel context.CancelFunc) {
+	w, ok := b.(backendWaiter)
+	if !ok {
+		return
+	}
+
+	// Buffered, so this goroutine still exits if the select below took the
+	// ctx.Done() branch and nobody is left to receive.
+	dead := make(chan error, 1)
+	go func() { dead <- w.Wait() }()
+
+	select {
+	case <-ctx.Done():
+	case err := <-dead:
+		log.Printf("client: %s: backend transport closed: %v", mountpoint, err)
+		cancel()
 	}
 }
 
