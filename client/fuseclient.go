@@ -27,7 +27,7 @@ type protocolInfo struct {
 
 // fetchProtocols asks the taildrive API at host:port what it serves.
 func fetchProtocols(ctx context.Context, host string, port int) ([]protocolInfo, error) {
-	url := fmt.Sprintf("http://%s/config", net.JoinHostPort(host, strconv.Itoa(port)))
+	url := fmt.Sprintf("http://%s:%d/config", host, port)
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return nil, err

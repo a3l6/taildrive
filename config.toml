@@ -1,13 +1,6 @@
 port = 8080
 tailscale_socket = "/var/run/tailscale/tailscaled.sock"
 
-[fuse]
-enabled = false
-backend = "sftp"
-peer = ""
-share = ""
-mountpoint = ""
-read_only = false
 
 [protocol]
 auto_protocols=true
@@ -18,5 +11,5 @@ protocols_enabled=["SFTP", "WEBDAV"]
 [sftp]
 port=22
 
-[webdav]
-port=8081
+#[webdav]
+#port=8081
