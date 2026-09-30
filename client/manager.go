@@ -239,12 +239,6 @@ func (m *mountManager) supervise(ctx context.Context, am *activeMount) {
 		backoff = backoffMin
 		log.Printf("client: %s: mounted over %s", am.rec.MountPoint, strings.ToLower(p.Name))
 
-		// fuse.Mount only returns once the mountpoint itself goes away, so a
-		// backend whose transport dies is invisible to it: the mount stays up
-		// and fails every operation. watchBackend cancels mountCtx when that
-		// happens, which unmounts and drops us into the reconnect path below.
-		// It has to be a child of ctx so the ctx.Err() check underneath keeps
-		// meaning "the user is shutting us down" and nothing else.
 		mountCtx, cancelMount := context.WithCancel(ctx)
 		go watchBackend(mountCtx, am.rec.MountPoint, backend, cancelMount)
 
