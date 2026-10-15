@@ -55,6 +55,9 @@ func (f *FS) propfind(ctx context.Context, p, depth string) ([]propResponse, err
 	}
 	defer resp.Body.Close()
 
+	if resp.StatusCode == http.StatusNotFound {
+		return nil, os.ErrNotExist // as-is: go-fuse maps only the bare value to ENOENT
+	}
 	if resp.StatusCode != http.StatusMultiStatus {
 		return nil, fmt.Errorf("webdav: propfind %s: %s", p, resp.Status)
 	}

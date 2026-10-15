@@ -17,11 +17,12 @@ import (
 )
 
 type Options struct {
-	Name         string `json:"name"`
-	ReadOnly     bool   `json:"readonly"`
-	Debug        bool
-	AttrTimeout  time.Duration
-	EntryTimeout time.Duration
+	Name            string `json:"name"`
+	ReadOnly        bool   `json:"readonly"`
+	Debug           bool
+	AttrTimeout     time.Duration
+	EntryTimeout    time.Duration
+	NegativeTimeout time.Duration
 }
 
 func (o *Options) applyDefaults() {
@@ -29,23 +30,38 @@ func (o *Options) applyDefaults() {
 		o.Name = "taildrive"
 	}
 
+	// Every uncached lookup is a round trip to the peer, so these trade a
+	// few seconds of staleness for not asking again on every keystroke.
 	if o.AttrTimeout == 0 {
-		o.AttrTimeout = time.Second
+		o.AttrTimeout = 5 * time.Second
 	}
 
 	if o.EntryTimeout == 0 {
-		o.EntryTimeout = time.Second
+		o.EntryTimeout = 5 * time.Second
+	}
+
+	if o.NegativeTimeout == 0 {
+		o.NegativeTimeout = 5 * time.Second
 	}
 }
 
 type mount struct {
 	fs       vfs.FS
 	uid, gid uint32
+	entryTTL time.Duration
 }
 
 type node struct {
 	fs.Inode
 	mount *mount
+
+	// listing is this directory's last ReadDir, kept so the Lookups that
+	// follow a readdir (ls -l, completion) don't each cost a round trip. It
+	// is trusted for EntryTimeout, the staleness the kernel already allows
+	// for its own entries, and dropped on any write through the mount.
+	mu       sync.Mutex
+	listing  map[string]vfs.Entry
+	listedAt time.Time
 }
 
 func Mount(ctx context.Context, mountpoint string, fsys vfs.FS, opts Options) error {
@@ -55,7 +71,7 @@ func Mount(ctx context.Context, mountpoint string, fsys vfs.FS, opts Options) er
 		return err
 	}
 
-	m := &mount{fs: fsys, uid: uint32(os.Getuid()), gid: uint32(os.Getgid())}
+	m := &mount{fs: fsys, uid: uint32(os.Getuid()), gid: uint32(os.Getgid()), entryTTL: opts.EntryTimeout}
 
 	mountOpts := fuse.MountOptions{
 		FsName:        opts.Name,
@@ -69,9 +85,10 @@ func Mount(ctx context.Context, mountpoint string, fsys vfs.FS, opts Options) er
 	}
 
 	server, err := fs.Mount(mountpoint, &node{mount: m}, &fs.Options{
-		MountOptions: mountOpts,
-		AttrTimeout:  &opts.AttrTimeout,
-		EntryTimeout: &opts.EntryTimeout,
+		MountOptions:    mountOpts,
+		AttrTimeout:     &opts.AttrTimeout,
+		EntryTimeout:    &opts.EntryTimeout,
+		NegativeTimeout: &opts.NegativeTimeout,
 	})
 
 	if err != nil {
@@ -115,8 +132,50 @@ var (
 func (n *node) path() string                 { return "/" + n.Path(n.Root()) }
 func (n *node) childPath(name string) string { return path.Join(n.path(), name) }
 
+// stat answers from this directory's listing while it is fresh, and asks the
+// peer otherwise.
+func (n *node) stat(ctx context.Context, name string) (vfs.Entry, error) {
+	n.mu.Lock()
+	fresh := n.listing != nil && time.Since(n.listedAt) < n.mount.entryTTL
+	e, ok := n.listing[name]
+	n.mu.Unlock()
+
+	if !fresh {
+		return n.mount.fs.Stat(ctx, n.childPath(name))
+	}
+	if !ok {
+		return vfs.Entry{}, syscall.ENOENT
+	}
+	return e, nil
+}
+
+// statSelf is stat for n itself, through its parent's listing.
+func (n *node) statSelf(ctx context.Context) (vfs.Entry, error) {
+	if name, parent := n.Parent(); parent != nil {
+		if p, ok := parent.Operations().(*node); ok {
+			return p.stat(ctx, name)
+		}
+	}
+	return n.mount.fs.Stat(ctx, n.path())
+}
+
+func (n *node) forgetListing() {
+	n.mu.Lock()
+	n.listing = nil
+	n.mu.Unlock()
+}
+
+// forgetParentListing drops the listing that holds n's own size and mtime.
+func (n *node) forgetParentListing() {
+	if _, parent := n.Parent(); parent != nil {
+		if p, ok := parent.Operations().(*node); ok {
+			p.forgetListing()
+		}
+	}
+}
+
 func (n *node) Lookup(ctx context.Context, name string, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
-	e, err := n.mount.fs.Stat(ctx, n.childPath(name))
+	e, err := n.stat(ctx, name)
 	if err != nil {
 		return nil, fs.ToErrno(err)
 	}
@@ -128,7 +187,7 @@ func (n *node) Lookup(ctx context.Context, name string, out *fuse.EntryOut) (*fs
 }
 
 func (n *node) Getattr(ctx context.Context, fh fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
-	e, err := n.mount.fs.Stat(ctx, n.path())
+	e, err := n.statSelf(ctx)
 	if err != nil {
 		return fs.ToErrno(err)
 	}
@@ -139,6 +198,7 @@ func (n *node) Getattr(ctx context.Context, fh fs.FileHandle, out *fuse.AttrOut)
 // TODO: Look into implementing this properly with all proper attrs handled
 func (n *node) Setattr(ctx context.Context, fh fs.FileHandle, in *fuse.SetAttrIn, out *fuse.AttrOut) syscall.Errno {
 	if size, ok := in.GetSize(); ok {
+		defer n.forgetParentListing()
 		if err := n.mount.fs.Truncate(ctx, n.path(), int64(size)); err != nil {
 			return fs.ToErrno(err)
 		}
@@ -154,9 +214,15 @@ func (n *node) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
 	}
 
 	out := make([]fuse.DirEntry, 0, len(entries))
+	listing := make(map[string]vfs.Entry, len(entries))
 	for _, e := range entries {
 		out = append(out, fuse.DirEntry{Name: e.Name, Mode: fileType(e.Mode)})
+		listing[e.Name] = e
 	}
+
+	n.mu.Lock()
+	n.listing, n.listedAt = listing, time.Now()
+	n.mu.Unlock()
 
 	return fs.NewListDirStream(out), 0
 }
@@ -166,27 +232,30 @@ func (n *node) Open(ctx context.Context, flags uint32) (fs.FileHandle, uint32, s
 	if err != nil {
 		return nil, 0, fs.ToErrno(err)
 	}
-	return &handle{file: f}, 0, 0
+	return &handle{node: n, file: f}, 0, 0
 }
 
 func (n *node) Create(ctx context.Context, name string, flags uint32, mode uint32, out *fuse.EntryOut) (*fs.Inode, fs.FileHandle, uint32, syscall.Errno) {
 	perm := os.FileMode(mode) & os.ModePerm
 
+	defer n.forgetListing()
 	f, err := n.mount.fs.Open(ctx, n.childPath(name), openFlags(flags)|os.O_CREATE, perm)
 	if err != nil {
 		return nil, nil, 0, fs.ToErrno(err)
 	}
 
-	child := n.NewInode(ctx, &node{mount: n.mount}, fs.StableAttr{Mode: syscall.S_IFREG})
+	childNode := &node{mount: n.mount}
+	child := n.NewInode(ctx, childNode, fs.StableAttr{Mode: syscall.S_IFREG})
 
 	n.mount.setAttr(vfs.Entry{Name: name, Mode: perm, ModTime: time.Now()}, &out.Attr)
 
-	return child, &handle{file: f}, 0, 0
+	return child, &handle{node: childNode, file: f}, 0, 0
 }
 
 func (n *node) Mkdir(ctx context.Context, name string, mode uint32, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
 	perm := os.FileMode(mode) & os.ModePerm
 
+	defer n.forgetListing()
 	if err := n.mount.fs.Mkdir(ctx, n.childPath(name), perm); err != nil {
 		return nil, fs.ToErrno(err)
 	}
@@ -199,6 +268,7 @@ func (n *node) Mkdir(ctx context.Context, name string, mode uint32, out *fuse.En
 }
 
 func (n *node) Unlink(ctx context.Context, name string) syscall.Errno {
+	defer n.forgetListing()
 	if err := n.mount.fs.Remove(ctx, n.childPath(name)); err != nil {
 		return fs.ToErrno(err)
 	}
@@ -206,6 +276,7 @@ func (n *node) Unlink(ctx context.Context, name string) syscall.Errno {
 }
 
 func (n *node) Rmdir(ctx context.Context, name string) syscall.Errno {
+	defer n.forgetListing()
 	if err := n.mount.fs.Remove(ctx, n.childPath(name)); err != nil {
 		return fs.ToErrno(err)
 	}
@@ -223,6 +294,8 @@ func (n *node) Rename(ctx context.Context, name string, newParent fs.InodeEmbedd
 		return syscall.EXDEV
 	}
 
+	defer n.forgetListing()
+	defer target.forgetListing()
 	if err := n.mount.fs.Rename(ctx, n.childPath(name), target.childPath(newName)); err != nil {
 		return fs.ToErrno(err)
 	}
@@ -231,6 +304,7 @@ func (n *node) Rename(ctx context.Context, name string, newParent fs.InodeEmbedd
 
 type handle struct {
 	mu   sync.Mutex
+	node *node
 	file vfs.File
 }
 
@@ -255,6 +329,7 @@ func (h *handle) Write(ctx context.Context, data []byte, off int64) (uint32, sys
 	h.mu.Lock()
 	defer h.mu.Unlock()
 
+	defer h.node.forgetParentListing()
 	n, err := h.file.WriteAt(data, off)
 	if err != nil {
 		return 0, fs.ToErrno(err)
