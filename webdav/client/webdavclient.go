@@ -110,6 +110,9 @@ func (f *FS) get(ctx context.Context, p string) ([]byte, error) {
 	}
 	defer resp.Body.Close()
 
+	if resp.StatusCode == http.StatusNotFound {
+		return nil, os.ErrNotExist
+	}
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("webdav: get %s: %s", p, resp.Status)
 	}
@@ -146,12 +149,20 @@ func (f *FS) Open(ctx context.Context, p string, flags int, perm os.FileMode) (v
 		switch {
 		case err == nil:
 			buf = body
-		case flags&os.O_CREATE == 0:
+		case flags&os.O_CREATE == 0 || err != os.ErrNotExist:
 			return nil, err
+		default:
+			// Create it now rather than on Close: callers like touch stat
+			// the file before closing it, and a file nobody writes to
+			// would otherwise never be PUT at all.
+			if err := f.put(ctx, p, nil); err != nil {
+				return nil, err
+			}
 		}
 	}
 
-	return &file{fs: f, path: p, buf: buf}, nil
+	// O_TRUNC empties the file even if nothing is written before Close.
+	return &file{fs: f, path: p, buf: buf, dirty: flags&os.O_TRUNC != 0}, nil
 }
 
 type file struct {
