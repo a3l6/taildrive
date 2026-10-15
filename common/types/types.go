@@ -1,15 +1,21 @@
 package types
 
 import (
+	"a3l6/m/config"
 	"a3l6/m/vfs"
 	"context"
 )
 
+// ReadyFunc is called by a protocol's Run once its listener is up, with the
+// address a client should dial to reach it.
+type ReadyFunc func(host string, port int)
+
 type GenericProtocolServer struct {
 	Name    string
 	Enabled bool
+	Host    string
 	Port    int
-	Run     func(context.Context, vfs.FS) error
+	Run     func(context.Context, vfs.FS, *config.Config, ReadyFunc) error
 }
 
 /*

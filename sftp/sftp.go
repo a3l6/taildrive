@@ -18,6 +18,7 @@ import (
 	"tailscale.com/tsnet"
 
 	"a3l6/m/common/ts"
+	"a3l6/m/common/types"
 	"a3l6/m/config"
 	"a3l6/m/vfs"
 )
@@ -34,7 +35,7 @@ func getHostname() string {
 	return st.Self.HostName
 }
 
-func Run(ctx context.Context, vfs vfs.FS) error {
+func Run(ctx context.Context, vfs vfs.FS, cfg *config.Config, ready types.ReadyFunc) error {
 	fs = vfs
 
 	srv := &tsnet.Server{
@@ -59,16 +60,18 @@ func Run(ctx context.Context, vfs vfs.FS) error {
 
 	sshConfig.AddHostKey(hostKey)
 
-	cfg, err := config.LoadConfig("./config.toml")
-	if err != nil {
-		cfg.ApplyDefaults()
-	}
-
 	ln, err := srv.Listen("tcp", fmt.Sprintf(":%d", cfg.Sftp.Port))
 	if err != nil {
 		return err
 	}
 	defer ln.Close()
+
+	// Advertise the tsnet node's own IP: its name can get a numeric suffix
+	// when it collides with a stale node, so the hostname is not reliable.
+	if _, err := srv.Up(ctx); err != nil {
+		return err
+	}
+	ip4, _ := srv.TailscaleIPs()
 
 	// Unblocks the Accept below when the registry cancels us.
 	go func() {
@@ -76,7 +79,8 @@ func Run(ctx context.Context, vfs vfs.FS) error {
 		ln.Close()
 	}()
 
-	log.Println("sftp-vfs: listening on the tailnet :22")
+	log.Printf("sftp-vfs: listening on %s:%d", ip4, cfg.Sftp.Port)
+	ready(ip4.String(), cfg.Sftp.Port)
 
 	var conns sync.WaitGroup
 	for {

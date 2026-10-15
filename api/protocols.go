@@ -26,6 +26,7 @@ type Protocol interface {
 */
 
 type Registry struct {
+	cfg         *conf.Config
 	configs     []*types.GenericProtocolServer
 	muregistrar sync.Mutex
 	registrar   map[string]context.CancelFunc
@@ -73,15 +74,20 @@ func (r *Registry) Start(name string, s *types.GenericProtocolServer) error {
 			r.muregistrar.Unlock()
 		}()
 
-		if protocol := r.Get(name); protocol != nil {
-			protocol.Enabled = true
+		// Advertise the protocol only once its listener is up, at the
+		// address it actually bound.
+		ready := func(host string, port int) {
+			r.muregistrar.Lock()
+			s.Enabled, s.Host, s.Port = true, host, port
+			r.muregistrar.Unlock()
+			log.Printf("protocol: %s ready on %s:%d", name, host, port)
 		}
 
-		if err := s.Run(ctx, filesystem); err != nil && err != context.Canceled {
+		if err := s.Run(ctx, filesystem, r.cfg, ready); err != nil && err != context.Canceled {
 			log.Printf("protocol: %s service failed: %s", name, err)
-			if protocol := r.Get(name); protocol != nil {
-				protocol.Enabled = true
-			}
+			r.muregistrar.Lock()
+			s.Enabled = false
+			r.muregistrar.Unlock()
 		}
 	}()
 
@@ -127,30 +133,24 @@ func (r *Registry) UnRegister(c *types.GenericProtocolServer) {
 
 func (r *Registry) Register(c *types.GenericProtocolServer) { r.configs = append(r.configs, c) }
 
-func handleConfig(apiHost string) http.HandlerFunc {
+func handleConfig() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 
+		registry.muregistrar.Lock()
 		out := make([]map[string]any, 0, len(registry.configs))
 		for _, c := range registry.configs {
 			out = append(out, map[string]any{
 				"name":    c.Name,
 				"enabled": c.Enabled,
-				"host":    protocolHost(c.Name, apiHost),
+				"host":    c.Host,
 				"port":    c.Port,
 			})
 		}
+		registry.muregistrar.Unlock()
+
 		json.NewEncoder(w).Encode(map[string]any{"protocols": out})
 	}
-}
-
-// protocolHost is the tailnet host a client should dial to reach the named
-// protocol. WebDAV listens on the API host; SFTP runs on its own tsnet node.
-func protocolHost(name, apiHost string) string {
-	if name == SFTPProtocolServer.Name {
-		return ts.SFTPHostname(apiHost)
-	}
-	return apiHost
 }
 
 func generateAvailableProtocols(peers []ts.PeerShares, cfg conf.Config) map[string]int {
@@ -242,12 +242,13 @@ var WEBDAVProtocolServer types.GenericProtocolServer = types.GenericProtocolServ
 
 // Inits all protocol servers. Empty cfg gets default config. See `config.Config{}.ApplyDefaults`
 func (r *Registry) init(cfg *conf.Config) {
+	// TODO: this dereferences a nil cfg and panics; it never fires today
+	// only because main always passes a loaded config.
 	if cfg == nil {
 		cfg.ApplyDefaults()
 	}
 
-	SFTPProtocolServer.Port = cfg.Sftp.Port
-	WEBDAVProtocolServer.Port = cfg.Webdav.Port
+	r.cfg = cfg
 
 	r.Register(&SFTPProtocolServer)
 	r.Register(&WEBDAVProtocolServer)

@@ -4,15 +4,18 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 
+	"a3l6/m/common/ts"
+	"a3l6/m/common/types"
 	"a3l6/m/config"
 	"a3l6/m/vfs"
 
 	"golang.org/x/net/webdav"
 )
 
-func Run(ctx context.Context, fs vfs.FS) error {
+func Run(ctx context.Context, fs vfs.FS, cfg *config.Config, ready types.ReadyFunc) error {
 	handler := &webdav.Handler{
 		Prefix:     "/",
 		FileSystem: davFS{fs},
@@ -24,12 +27,19 @@ func Run(ctx context.Context, fs vfs.FS) error {
 		},
 	}
 
-	cfg, err := config.LoadConfig("./config.toml")
+	// Bind to the tailnet address only, like the API, so the address we
+	// advertise is the one we actually listen on.
+	ip, err := ts.GetTailscaleIP(ctx, cfg)
 	if err != nil {
-		cfg.ApplyDefaults()
+		return err
 	}
 
-	srv := &http.Server{Addr: fmt.Sprintf(":%d", cfg.Webdav.Port), Handler: handler}
+	ln, err := net.Listen("tcp", net.JoinHostPort(ip, fmt.Sprint(cfg.Webdav.Port)))
+	if err != nil {
+		return err
+	}
+
+	srv := &http.Server{Handler: handler}
 
 	runCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -41,8 +51,11 @@ func Run(ctx context.Context, fs vfs.FS) error {
 		srv.Shutdown(context.Background())
 	}()
 
-	log.Println("webdav: listening on port ", cfg.Webdav.Port)
-	if err := srv.ListenAndServe(); err != http.ErrServerClosed {
+	addr := ln.Addr().(*net.TCPAddr)
+	log.Println("webdav: listening on", addr)
+	ready(ip, addr.Port)
+
+	if err := srv.Serve(ln); err != http.ErrServerClosed {
 		return err
 	}
 
